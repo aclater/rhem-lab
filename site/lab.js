@@ -1,6 +1,6 @@
 // Page chrome for the lab guide: sidebar, terminal blocks with prompts, step numbers and checkboxes.
 // Progress ticks are kept in this browser only (localStorage); the guide works without them.
-const LAB_VERSION = "1.0.0";   // set by: make version V=x.y.z (keeps the VERSION file in step)
+const LAB_VERSION = "1.0.1";   // set by: make version V=x.y.z (keeps the VERSION file in step)
 
 const EXERCISES = [
   { file: "index.html", num: "", name: "", title: "Overview" },
