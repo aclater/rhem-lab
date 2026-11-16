@@ -16,6 +16,7 @@ const EXERCISES = [
   { file: "11-teardown.html", num: "11", name: "lab-teardown", title: "Remove the lab" },
   { file: "12-disconnected.html", num: "A", name: "disconnected", title: "Run the lab disconnected" },
   { file: "13-classroom.html", num: "B", name: "classroom", title: "Deliver the lab in a classroom" },
+  { file: "14-iso-install.html", num: "C", name: "iso-install", title: "Install a device from an ISO" },
 ];
 // Who you are and which machine you are on, for each kind of command block.
 const HOSTS = {
@@ -25,6 +26,7 @@ const HOSTS = {
   "edge-1": { user: "lab", machine: "edge-1", dir: "~", label: "device" },
   "edge-2": { user: "lab", machine: "edge-2", dir: "~", label: "device" },
   "edge-3": { user: "lab", machine: "edge-3", dir: "~", label: "device" },
+  "edge-4": { user: "lab", machine: "edge-4", dir: "~", label: "device" },
 };
 const store = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },

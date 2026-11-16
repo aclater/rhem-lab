@@ -1,0 +1,58 @@
+# Appendix B: copy the classroom kit to student workstations and set each one up, from the instructor's workstation.
+# Run in ~/edgelab, after classroom-kit.yml, with a file that lists the workstations:
+#
+#   ansible-playbook -i students guide/ansible/classroom-push.yml
+#
+# Each workstation needs the packages of Appendix B (ansible-core is not needed there) and your SSH key in the
+# student's account. Nothing is run as root.
+
+- name: Check the kit
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: vars.yml
+  tasks:
+    - name: Check that the kit has been assembled
+      ansible.builtin.stat:
+        path: "{{ kit_dir }}/SHA256SUMS"
+      register: sums
+      failed_when: not sums.stat.exists
+
+- name: Copy the kit to each student workstation and set it up
+  hosts: all
+  gather_facts: false
+  vars_files: vars.yml
+  tasks:
+    - name: Find the student's home folder
+      ansible.builtin.command: printenv HOME
+      register: home
+      changed_when: false
+
+    - name: Look for a kit that is already there
+      ansible.builtin.stat:
+        path: "{{ home.stdout }}/{{ kit_dir | basename }}/SHA256SUMS"
+      register: existing
+
+    - name: Read the free space in the student's home folder
+      ansible.builtin.command: "df --output=avail -BG {{ home.stdout }}"
+      register: room
+      changed_when: false
+
+    - name: Check that there is room for the kit and the lab
+      ansible.builtin.assert:
+        that: (room.stdout_lines | last | trim | regex_replace('G$', '') | int) >= 67
+        fail_msg: "The kit and the lab need 67 GB free in the student's home folder."
+      when: not existing.stat.exists
+
+    - name: Copy the kit
+      ansible.builtin.copy:
+        src: "{{ kit_dir }}"
+        dest: "{{ home.stdout }}/"
+        mode: preserve
+
+    - name: Set up the workstation
+      ansible.builtin.import_tasks: tasks/student-setup.yml
+      vars:
+        kit: "{{ home.stdout }}/{{ kit_dir | basename }}"
+        home_dir: "{{ home.stdout }}"
+        work_dir: "{{ home.stdout }}/edgelab"

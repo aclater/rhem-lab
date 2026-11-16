@@ -123,3 +123,25 @@ Each entry gives the decision, the reason, the alternatives considered and the t
 - **Trade-off:** workstation packages are installed in advance, because they must match each workstation's own
   release; `ansible-core` is a prerequisite on student workstations.
 
+
+## Setting up workstations from the instructor's
+
+- **Decision:** a third classroom playbook, `classroom-push.yml`, copies the kit to a list of student workstations
+  over SSH and runs the same setup there. It is an option next to the student-run playbook, which stays the default.
+- **Why:** in a room where the instructor can already log in to the workstations, one command prepares all of them,
+  and students need neither `ansible-core` nor the setup step.
+- **Alternatives:** only the student-run playbook; installing the workstation packages from the instructor's
+  workstation as well.
+- **Trade-off:** it needs SSH access and a list of workstations, and it still does nothing as root, so packages and
+  the `libvirt` group remain a prerequisite.
+
+## An installer ISO as an appendix
+
+- **Decision:** Appendix C builds an unattended installer ISO from the device image with bootc-image-builder and a
+  kickstart file, and installs a fourth device from it. The main path keeps the disk image.
+- **Why:** physical devices are usually installed from boot media, and the ISO shows what changes: the login user
+  and the disk layout move from the image builder's settings to the kickstart file. A disk image is faster and
+  needs less memory, so it stays the route for the three lab devices.
+- **Alternatives:** an ISO for all devices; a network (PXE) install.
+- **Trade-off:** the ISO build downloads installer packages with the server's registration, so the appendix does
+  not work in the disconnected lab.

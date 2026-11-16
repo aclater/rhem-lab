@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install a device from an ISO</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Appendix C <span class="exname">iso-install</span></p>
+<h1>Install a device from an ISO</h1>
+<p class="lede">The three devices so far started from a ready-made disk. A physical device usually starts empty and is installed from boot media. Here you turn the device image into an installer ISO that needs no answers, and install a fourth device from it.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>An installer ISO, built from <code>edge-os:v1</code>, that carries the OS image and a kickstart file: the installer's instructions.</li>
+  <li>A fourth device, <code>edge-4</code>, installed from that ISO on an empty disk with no questions asked.</li>
+  <li><code>edge-4</code> enrolled, in the fleet, and running what the fleet says.</li>
+</ul>
+</div>
+
+<h2>How an ISO install differs from a disk image</h2>
+<table>
+<tr><th></th><th>Disk image (module 6)</th><th>Installer ISO (this appendix)</th></tr>
+<tr><td>What you build</td><td>A finished disk. The device boots it as it is.</td><td>Boot media. The device boots the installer, which writes the OS image to the device's own disk.</td></tr>
+<tr><td>Where it fits</td><td>VMs and cloud instances, or disks written at the factory.</td><td>Physical devices installed on site from a USB drive, or over the network.</td></tr>
+<tr><td>The login user</td><td>Added by bootc-image-builder from <code>config.toml</code>.</td><td>Added by the installer from the kickstart file.</td></tr>
+<tr><td>The disk layout</td><td>Fixed when the disk image is built.</td><td>Decided by the kickstart file, on the device's real disk.</td></tr>
+</table>
+<p>Either way the device ends up running the same OS image, follows the same registry for updates, and enrolls with the same certificate. Edge Manager cannot tell the two apart.</p>
+
+<h2>Before you begin</h2>
+<p>You need the lab up to and including <a href="08-fleet.html">Manage devices as a fleet</a>, with the server VM running. The later exercises can be done before or after this one. On the workstation, in <code>~/edgelab</code>:</p>
+<pre class="cmd" data-on="host">
+./lab status
+</pre>
+<div class="admon important"><p class="admon-title">Important</p><p><b>This appendix needs the connected lab.</b> bootc-image-builder downloads the installer's own packages from Red Hat's repositories, using the server's registration. A server built with <a href="12-disconnected.html">Run the lab disconnected</a> is not registered and cannot build the ISO.</p></div>
+<p>The installer needs more memory than a running device: <code>edge-4</code> gets 2 GiB. On a 16 GB workstation that still fits next to the server and the three devices.</p>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Write the kickstart settings</h2>
+<p>In the server VM, write a second settings file for bootc-image-builder. This one holds a kickstart file. The word <code>LAB_PUBLIC_KEY</code> is a marker; enter it as shown:</p>
+<pre class="cmd" data-on="rhem">
+cd ~/device
+cat > config-iso.toml &lt;&lt;'EOF'
+[customizations.installer.kickstart]
+contents = """
+text
+lang en_US.UTF-8
+keyboard us
+timezone UTC
+network --bootproto=dhcp --activate
+zerombr
+clearpart --all --initlabel
+autopart --type=lvm --noswap
+rootpw --lock
+user --name=lab --groups=wheel --lock
+sshkey --username=lab "LAB_PUBLIC_KEY"
+reboot
+"""
+EOF
+</pre>
+<table>
+<tr><th>Line</th><th>Meaning</th></tr>
+<tr><td><code>text</code>, <code>lang</code>, <code>keyboard</code>, <code>timezone</code></td><td>Answers to the questions the installer would otherwise ask on screen.</td></tr>
+<tr><td><code>network</code></td><td>Bring the network up with DHCP.</td></tr>
+<tr><td><code>zerombr</code>, <code>clearpart --all --initlabel</code></td><td>Erase every disk in the machine and start with an empty partition table.</td></tr>
+<tr><td><code>autopart --type=lvm --noswap</code></td><td>Let the installer lay out the disk: boot partitions and one LVM volume, no swap.</td></tr>
+<tr><td><code>rootpw --lock</code></td><td>Nobody can log in as root.</td></tr>
+<tr><td><code>user</code>, <code>sshkey</code></td><td>The login user <code>lab</code>, in the group <code>wheel</code>, with no password and your lab public key. This replaces the <code>[[customizations.user]]</code> block of module 6.</td></tr>
+<tr><td><code>reboot</code></td><td>Restart into the installed system when done.</td></tr>
+</table>
+<p>The file does not say which operating system to install. bootc-image-builder adds that line itself: install the OS image that it packs into the ISO, and afterwards follow that image in the lab registry for updates.</p>
+<p>Now replace the marker with the key, as in module 6. Enter this command exactly as shown; do not substitute anything yourself. The key file <code>lab-key.pub</code> is still there from that module:</p>
+<pre class="cmd" data-on="rhem">
+sed -i "s|LAB_PUBLIC_KEY|$(cat lab-key.pub)|" config-iso.toml
+grep sshkey config-iso.toml
+mkdir output-iso
+</pre>
+<pre class="out">
+sshkey --username=lab "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… edgelab"
+</pre>
+<p>The line must now hold the key itself, starting with <code>ssh-ed25519</code>. If it still says <code>LAB_PUBLIC_KEY</code>, the device will install but you will not be able to log in to it.</p>
+</section>
+
+<section class="step">
+<h2>Build the ISO</h2>
+<p>This is the command of module 6 with three differences: the settings file, the output folder, and <code>--type anaconda-iso</code>. Anaconda is the name of the RHEL installer. The build takes about six minutes.</p>
+<pre class="cmd" data-on="rhem">
+sudo podman run --rm --privileged --pull=newer \
+  --security-opt label=type:unconfined_t \
+  -v ./config-iso.toml:/config.toml:ro \
+  -v ./output-iso:/output \
+  -v /var/lib/containers/storage:/var/lib/containers/storage \
+  registry.redhat.io/rhel9/bootc-image-builder:latest \
+  --type anaconda-iso \
+  rhem.lab.internal:8443/admin/edge-os:v1
+sudo ls -lh output-iso/bootiso/
+</pre>
+<pre class="out">
+...output omitted...
+Build complete!
+Results saved in .
+-rw-r--r--. 1 root root 2.9G … install.iso
+</pre>
+<p>The ISO is larger than the disk image because it holds two things: the installer, and the whole OS image for the installer to write.</p>
+</section>
+
+<section class="step">
+<h2>Copy the ISO to the workstation</h2>
+<pre class="cmd" data-on="host">
+scp -F ~/edgelab/ssh_config rhem:device/output-iso/bootiso/install.iso images/edge-install.iso
+ls -lh images/edge-install.iso
+</pre>
+<pre class="out">
+-rw-r--r--. 1 student student 2.9G … images/edge-install.iso
+</pre>
+<div class="admon warning"><p class="admon-title">Warning</p><p>This ISO erases every disk of any machine that boots from it, without asking. That is what makes it useful for installing devices, and dangerous anywhere else. Keep it in the lab.</p></div>
+</section>
+
+<section class="step">
+<h2>Give the new device an address</h2>
+<p>The lab network hands fixed addresses to the machines it knows. Add <code>edge-4</code> to it, while it runs and in its saved definition:</p>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system net-update rhem-lab add ip-dhcp-host "&lt;host mac='52:54:00:a0:00:24' name='edge-4' ip='192.168.160.24'/&gt;" --live --config
+</pre>
+<pre class="out">
+Updated network rhem-lab persistent config and live state
+</pre>
+<p>Add the device to your SSH settings as well:</p>
+<pre class="cmd" data-on="host">
+cat >> ssh_config &lt;&lt;'EOF'
+Host edge-4
+  HostName 192.168.160.24
+  User lab
+EOF
+</pre>
+</section>
+
+<section class="step">
+<h2>Install the device</h2>
+<p>Create an empty 20 GiB disk, then a VM that boots from the ISO with that disk attached:</p>
+<pre class="cmd" data-on="host">
+qemu-img create -f qcow2 images/edge-4.qcow2 20G
+virt-install --connect qemu:///system --name edge-4 --memory 2048 --vcpus 1 \
+  --cdrom images/edge-install.iso --disk images/edge-4.qcow2 --osinfo rhel9-unknown \
+  --network network=rhem-lab,mac=52:54:00:a0:00:24 \
+  --boot uefi --graphics none --noautoconsole --wait -1
+</pre>
+<pre class="out">
+...output omitted...
+Domain is still running. Installation may be in progress.
+Waiting for the installation to complete.
+Domain has shutdown. Continuing.
+Domain creation completed.
+Restarting guest.
+</pre>
+<p>where:</p>
+<ul>
+  <li><code>--cdrom</code> boots the VM from the ISO, in place of <code>--import</code>, which booted an existing disk.</li>
+  <li><code>--wait -1</code> keeps the command waiting until the installer has finished, and then starts the VM again from its own disk.</li>
+</ul>
+<p>The command prints nothing while the installer works, and returns after about three minutes. Nobody answered a question: the kickstart file did.</p>
+</section>
+
+<section class="step">
+<h2>Approve the device</h2>
+<p>The installed system starts the agent, and the agent asks to enroll, exactly as on the other devices. In the server VM:</p>
+<pre class="cmd" data-on="rhem">
+flightctl get enrollmentrequests
+</pre>
+<pre class="out">
+NAME                                                   APPROVAL   APPROVER   APPROVED LABELS
+0hv9ha1dusrut6tes7js8hbdedph814lcuo1if1gvm92t5hsgc20   Approved   admin      alias=edge-2,site=lab
+1jn34ajbcdc1vhliuj5s7suq3ja49g5vjdqu101am2b9jgsrtd20   Approved   admin      alias=edge-1,site=lab
+jds05pk1sdau29gqto7b4meljrpg1hn3759h4keu47b7erbebcng   Approved   admin      alias=edge-3,site=lab
+phjtuf1hcikvu3a2knii2n4cgf7p6427n2re8mirv33fn2gcl64g   Pending
+</pre>
+<p>Approve every request that is not approved yet, with the fleet's label. The first part of the command lists only those requests:</p>
+<pre class="cmd" data-on="rhem">
+for request in $(flightctl get enrollmentrequests --field-selector 'status.approval.approved!=true' -o name); do flightctl approve -l site=lab er/$request; done
+flightctl get devices
+</pre>
+<pre class="out">
+NAME                                                   ALIAS    OWNER       SYSTEM   UPDATED    APPLICATIONS   SYSTEM INFO
+...output omitted...
+phjtuf1hcikvu3a2knii2n4cgf7p6427n2re8mirv33fn2gcl64g   edge-4   Fleet/lab   Unknown  OutOfDate  Unknown        Unknown
+...output omitted...
+</pre>
+<p>The label <code>site=lab</code> puts the device in the fleet, and the fleet takes over. Whatever it gives the other devices, <code>edge-4</code> now gets too: the application, if you have done <a href="09-workloads.html">Deploy a workload</a>, and the fleet's OS image. If the fleet pins a different OS release from the one in the ISO, the device downloads it and restarts once: in the test for this guide a device installed from a <code>v1</code> ISO was running <code>v2</code> and the application three and a half minutes after approval. An ISO does not have to be rebuilt for every OS release.</p>
+</section>
+
+<section class="step">
+<h2>Look at the device</h2>
+<pre class="cmd" data-on="host">
+ssh -F ~/edgelab/ssh_config edge-4
+</pre>
+<pre class="cmd" data-on="edge-4">
+sudo bootc status
+lsblk
+exit
+</pre>
+<pre class="out">
+...output omitted...
+  booted:
+    image:
+      image:
+        image: rhem.lab.internal:8443/admin/edge-os:v1
+        transport: registry
+...output omitted...
+vda                   252:0    0   20G  0 disk
+├─vda1                252:1    0  600M  0 part /boot/efi
+├─vda2                252:2    0    1G  0 part /boot
+└─vda3                252:3    0 18.4G  0 part
+  └─rhel_edge--4-root 253:0    0 18.4G  0 lvm  /var
+...output omitted...
+</pre>
+<p><code>bootc status</code> shows the image the device follows in the lab registry, although it was installed from the ISO and not pulled. It shows <code>v1</code> until the fleet has moved the device to another release. <code>lsblk</code> shows the layout that <code>autopart</code> chose on the empty disk.</p>
+</section>
+
+<h2>Evaluation</h2>
+<p>In the server VM, the fleet owns four devices, and <code>edge-4</code> settles at <code>UpToDate</code> like the others:</p>
+<pre class="cmd" data-on="rhem">
+flightctl get devices
+</pre>
+
+<h2>Finish</h2>
+<p>Keep <code>edge-4</code> for the remaining exercises if you like; a fleet change reaches it with the others. Before <a href="11-teardown.html">Remove the lab</a>, delete it, because that exercise only knows the first three devices:</p>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system destroy edge-4
+virsh -c qemu:///system undefine edge-4 --nvram
+</pre>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>
