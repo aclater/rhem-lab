@@ -6,15 +6,38 @@ enroll three edge VMs, and manage them as a fleet with a workload and an operati
 You run every step yourself, on one Linux workstation with KVM. The guide explains what each step does, why, and
 what it changes in the result.
 
-## Read the guide
+## Quick start
 
-```
-make serve     # starts the guide in the background and prints its address
-make stop      # stops it
-```
+You need a workstation running RHEL 9, RHEL 10 or Fedora with KVM, 16 GB of memory, 50 GB of free disk space, and a
+Red Hat subscription that includes Red Hat Edge Manager.
 
-Start with "Prepare the workstation". Appendix A covers running the whole lab with no internet access. Appendix B is for instructors: it packs the lab
-into one kit for a classroom of disconnected workstations.
+1. Install the tools and get the guide:
+
+   ```
+   sudo dnf install -y libvirt qemu-kvm qemu-img virt-install git make openssl
+   sudo systemctl enable --now libvirtd
+   sudo usermod -aG libvirt "$USER"
+   mkdir ~/edgelab
+   cd ~/edgelab
+   git clone https://github.com/aclater/rhem-lab.git guide
+   ```
+
+2. Start the guide and open the address it prints:
+
+   ```
+   make -C guide serve
+   ```
+
+3. Follow the guide from "Prepare the workstation". It explains the commands above, finishes the working folder
+   and lists the three files to download from Red Hat. The exercises then build the lab in order: network, server,
+   Edge Manager, registry, device image, devices, fleet, workload, OS update. Allow about three hours.
+
+`make -C guide stop` stops the guide's web server.
+
+| If you want to | Go to |
+|---|---|
+| Run the whole lab with no internet access | Appendix A, "Run the lab disconnected" |
+| Deliver the lab to a class | Appendix B, "Deliver the lab in a classroom" |
 
 ## Check your work
 
