@@ -36,7 +36,7 @@
 <table>
 <tr><th>Who</th><th>Needs</th></tr>
 <tr><td>Instructor's workstation</td><td>Everything in <a href="00-prerequisites.html">Prepare the workstation</a>, completed, with internet access; the <code>ansible-core</code> package; 15 GB of free disk space on top of the lab's own.</td></tr>
-<tr><td>Each student workstation</td><td>x86_64 RHEL 9, RHEL 10 or Fedora with KVM, 16 GB of memory, 4 or more CPU threads and 60 GB of free disk space. The packages below, installed in advance, and the student's user in the <code>libvirt</code> group.</td></tr>
+<tr><td>Each student workstation</td><td>x86_64 RHEL 9, RHEL 10 or Fedora with KVM, 16 GB of memory, 4 or more CPU threads and 60 GB of free disk space (67 GB if the kit is copied to it). The packages below, installed in advance, and the student's user in the <code>libvirt</code> group.</td></tr>
 </table>
 <p>Install the packages on each student workstation while it still has a package source:</p>
 <pre class="cmd" data-on="host">
@@ -105,6 +105,32 @@ tar -xf classroom-kit.tar
 <p>Stop the server with <kbd>Ctrl</kbd>+<kbd>C</kbd> when everyone has the file. Your workstation's firewall must allow port 8000 for this: <code>sudo firewall-cmd --add-port=8000/tcp</code> opens it until the next reboot.</p>
 </section>
 
+<section class="step">
+<h2>Or set up every workstation from yours</h2>
+<p>If you can log in to the student workstations over SSH, one playbook copies the kit to each of them and does the student's setup as well. Students then start at "Start the lab" below. This needs:</p>
+<ul>
+  <li>Your SSH public key in each student's account (<code>ssh-copy-id</code> puts it there), and the SSH service running on each workstation.</li>
+  <li>The packages listed above on each workstation. <code>ansible-core</code> is not needed there; it runs on your workstation only.</li>
+</ul>
+<p>In <code>~/edgelab</code>, create a file named <code>students</code> with <code>vi students</code>. It has one line per workstation: its name or address on the classroom network, then the student's login name. For example:</p>
+<pre class="file">
+ws01.example.com ansible_user=student
+ws02.example.com ansible_user=student
+</pre>
+<p>Then run the playbook:</p>
+<pre class="cmd" data-on="host">
+ansible-playbook -i students guide/ansible/classroom-push.yml
+</pre>
+<pre class="out">
+...output omitted...
+PLAY RECAP *********************************************************************
+localhost                  : ok=1    changed=0    unreachable=0    failed=0 ...
+ws01.example.com           : ok=20   changed=6    unreachable=0    failed=0 ...
+ws02.example.com           : ok=20   changed=6    unreachable=0    failed=0 ...
+</pre>
+<p>Two workstations at once took a little over two minutes. The playbook works on five workstations at a time. On each one it copies the kit to <code>~/classroom-kit</code>, then runs the same checks and setup as the student's own playbook in the next section. Nothing runs as root. A workstation that fails a check is reported by name and the others carry on; fix it and run the playbook again, which skips what is already done.</p>
+</section>
+
 <h2>Instructions: on each student workstation</h2>
 
 <section class="step">
@@ -164,9 +190,10 @@ Overall lab grade: PASS
 <tr><th>Role</th><th>Tested on</th><th>What was run</th></tr>
 <tr><td>Instructor</td><td>Fedora 44 and Fedora 45</td><td>Module 0, then both playbooks: the offline files gathered (about 12 minutes) and the kit assembled.</td></tr>
 <tr><td>Student</td><td>Fedora 44, Fedora 45, RHEL 9.8 and RHEL 10.2</td><td>Packages installed as listed above, workstation set up from the kit and graded, and a disconnected server built from it.</td></tr>
+<tr><td>Instructor, all workstations at once</td><td>Fedora 45, to two Fedora 45 workstations without <code>ansible-core</code></td><td>The kit copied over SSH and both workstations set up and graded by <code>classroom-push.yml</code>.</td></tr>
 <tr><td>Student, whole lab</td><td>Fedora 45, on a separate machine</td><td>Every exercise from the kit, by hand, with no internet access for the lab. The kit arrived both as a copied folder and as one file over HTTP.</td></tr>
 </table>
-<p>The playbooks ran with ansible-core 2.14, 2.16, 2.20 and 2.22. Not tested: an instructor's workstation running RHEL, portable media, and more than one student at a time.</p>
+<p>The playbooks ran with ansible-core 2.14, 2.16, 2.20 and 2.22. Not tested: an instructor's workstation running RHEL, portable media, and more than two workstations at a time.</p>
 </main>
 </div>
 <script src="lab.js"></script>
