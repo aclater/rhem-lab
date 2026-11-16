@@ -145,3 +145,16 @@ Each entry gives the decision, the reason, the alternatives considered and the t
 - **Alternatives:** an ISO for all devices; a network (PXE) install.
 - **Trade-off:** the ISO build downloads installer packages with the server's registration, so the appendix does
   not work in the disconnected lab.
+
+## A version number for the guide
+
+- **Decision:** the guide carries one version number, `major.minor.patch`, in the file `VERSION`. Every page shows
+  it at the bottom of the sidebar, `./lab version` prints it, and each version is a `v` tag in git.
+  `make version V=1.2.3` sets the file and the sidebar together. Major: an existing working folder no longer
+  matches the guide. Minor: new or reworked exercises. Patch: corrections.
+- **Why:** copies of the guide travel without git history, in the classroom kit and on the hosted page, and a
+  student, an instructor and a problem report need to name the same copy.
+- **Alternatives:** the git commit alone, which a kit copy does not have; a build date, which says nothing about
+  compatibility.
+- **Trade-off:** the number lives in two files, `VERSION` and `site/lab.js`, because the pages must also work
+  opened from disk. `./lab version` fails when they differ.

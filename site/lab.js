@@ -1,5 +1,7 @@
 // Page chrome for the lab guide: sidebar, terminal blocks with prompts, step numbers and checkboxes.
 // Progress ticks are kept in this browser only (localStorage); the guide works without them.
+const LAB_VERSION = "1.0.0";   // set by: make version V=x.y.z (keeps the VERSION file in step)
+
 const EXERCISES = [
   { file: "index.html", num: "", name: "", title: "Overview" },
   { file: "00-prerequisites.html", num: "0", name: "prep-workstation", title: "Prepare the workstation" },
@@ -56,7 +58,8 @@ function buildNav() {
       <div><code>[student@workstation edgelab]$</code> your workstation</div>
       <div><code>[cloud-user@rhem ~]$</code> the server VM</div>
       <div><code>[lab@edge-1 ~]$</code> an edge device</div>
-    </div>`;
+    </div>
+    <p class="version">Lab guide version ${LAB_VERSION}</p>`;
 }
 
 // Turn each <pre class="cmd"> (and the <pre class="out"> that follows it, if any) into one terminal block:

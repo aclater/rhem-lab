@@ -6,8 +6,10 @@
   lab start EXERCISE        before an exercise: confirm that the earlier exercises are complete
   lab grade EXERCISE        after an exercise: check your work, step by step
   lab finish EXERCISE       close an exercise and name the next one
+  lab version               the version of this lab guide
 """
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -131,6 +133,17 @@ def cmd_finish(name):
     return 0
 
 
+def cmd_version():
+    here = pathlib.Path(__file__).resolve().parent
+    version = (here / "VERSION").read_text().strip()
+    print(f"Edge Manager lab guide {version}")
+    shown = re.search(r'^const LAB_VERSION = "([^"]*)";', (here / "site" / "lab.js").read_text(), re.M)
+    if not shown or shown.group(1) != version:
+        print(f"lab: the guide's pages show version {shown.group(1) if shown else 'none'}; this copy is inconsistent.")
+        return 1
+    return 0
+
+
 def main(argv):
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
@@ -138,6 +151,8 @@ def main(argv):
     verb, rest = argv[0], argv[1:]
     if verb == "list" and not rest:
         return cmd_list()
+    if verb in ("version", "--version") and not rest:
+        return cmd_version()
     if verb == "status" and not rest:
         return cmd_status()
     if verb in ("start", "grade", "finish") and len(rest) == 1:
