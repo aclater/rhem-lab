@@ -1,0 +1,53 @@
+# Create one lab VM from the RHEL guest image, unless it already exists, and make it reachable by Ansible.
+# Parameters: vm_host (name in ssh_config), vm_mac, vm_memory, vm_vcpus, vm_disk_size.
+- name: "Look for the VM {{ vm_prefix }}{{ vm_host }}"
+  ansible.builtin.command: "{{ virsh }} domstate {{ vm_prefix }}{{ vm_host }}"
+  register: vm_state
+  changed_when: false
+  failed_when: false
+
+- name: "Create the VM {{ vm_prefix }}{{ vm_host }}"
+  when: vm_state.rc != 0
+  block:
+    - name: Copy the guest image
+      ansible.builtin.command: "cp --sparse=always {{ guest_image }} {{ lab_dir }}/images/{{ vm_host }}.qcow2"
+      args:
+        creates: "{{ lab_dir }}/images/{{ vm_host }}.qcow2"
+
+    - name: Grow the disk
+      ansible.builtin.command: "qemu-img resize {{ lab_dir }}/images/{{ vm_host }}.qcow2 {{ vm_disk_size }}"
+
+    - name: Read the VM's address and known-hosts file from the SSH settings
+      ansible.builtin.command: "ssh -F {{ ssh_config }} -G {{ vm_host }}"
+      register: ssh_settings
+      changed_when: false
+
+    - name: Forget the host key of an earlier VM at the same address
+      ansible.builtin.command: >-
+        ssh-keygen -R {{ ssh_settings.stdout | regex_search('(?m)^hostname (\S+)$', '\1') | first }}
+        -f {{ ssh_settings.stdout | regex_search('(?m)^userknownhostsfile (\S+)', '\1') | first }}
+      failed_when: false
+
+    - name: Create and start the VM
+      ansible.builtin.command: >-
+        virt-install --connect qemu:///system --name {{ vm_prefix }}{{ vm_host }}
+        --memory {{ vm_memory }} --vcpus {{ vm_vcpus }}
+        --import --disk {{ lab_dir }}/images/{{ vm_host }}.qcow2 --osinfo rhel9-unknown
+        --network network={{ libvirt_network }},mac={{ vm_mac }}
+        --cloud-init clouduser-ssh-key={{ lab_dir }}/keys/id_ed25519.pub
+        --boot uefi --graphics none --noautoconsole
+
+- name: "Start the VM {{ vm_prefix }}{{ vm_host }} if it is shut off"
+  ansible.builtin.command: "{{ virsh }} start {{ vm_prefix }}{{ vm_host }}"
+  when: vm_state.rc == 0 and 'shut off' in vm_state.stdout
+
+- name: Remember whether this run created the VM
+  ansible.builtin.set_fact:
+    vm_created: "{{ vm_state.rc != 0 }}"
+
+- name: Make the VM known to the rest of the playbook
+  ansible.builtin.add_host:
+    name: "{{ vm_host }}"
+    ansible_ssh_common_args: "-F {{ ssh_config }}"
+    ansible_python_interpreter: /usr/bin/python3
+  changed_when: false

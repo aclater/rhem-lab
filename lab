@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""lab: check your work in this lab from the command line. It only reads; it never changes anything.
+
+  lab list                  the exercises, in order
+  lab status                where you are: every exercise, and the next thing to do
+  lab start EXERCISE        before an exercise: confirm that the earlier exercises are complete
+  lab grade EXERCISE        after an exercise: check your work, step by step
+  lab finish EXERCISE       close an exercise and name the next one
+"""
+import pathlib
+import sys
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+import grading  # noqa: E402
+from grading.core import LAB  # noqa: E402
+
+TTY = sys.stdout.isatty()
+GREEN, RED, DIM, BOLD, OFF = (("\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m") if TTY else ("",) * 5)
+COLOUR = {"SUCCESS": GREEN, "PASS": GREEN, "FAIL": RED}
+WIDTH = 78
+BY_NAME = {m.NAME: m for m in grading.EXERCISES}
+
+
+def line(label, state):
+    """One result line:  · label ....... STATE"""
+    dots = "." * max(3, WIDTH - len(label) - len(state))
+    print(f" · {label} {DIM}{dots}{OFF} {COLOUR.get(state, DIM)}{state}{OFF}")
+
+
+def hint(text):
+    if text:
+        print(f"     {DIM}{text}{OFF}")
+
+
+def show_steps(result):
+    for state, label, why in result.steps:
+        line(label, state)
+        if state != "SUCCESS":
+            hint(why)
+
+
+def exercise(name):
+    if name not in BY_NAME:
+        sys.exit(f"lab: no exercise named '{name}'. Run 'lab list' to see the names.")
+    return BY_NAME[name]
+
+
+def earlier(mod):
+    """The exercises that come before this one. Teardown has no prerequisites: it removes what the others built."""
+    return [] if mod.NAME == "lab-teardown" else grading.EXERCISES[: grading.EXERCISES.index(mod)]
+
+
+def cmd_list():
+    print(f"\n{'#':>3}  {'Exercise':<18} Title")
+    for m in grading.EXERCISES:
+        print(f"{m.NUM:>3}  {m.NAME:<18} {m.TITLE}")
+    print("\nFor each one: lab start EXERCISE, do the exercise, lab grade EXERCISE, lab finish EXERCISE.")
+    return 0
+
+
+def cmd_status():
+    print(f"\nLab status ({LAB}):\n")
+    current = None
+    for m in grading.EXERCISES:
+        if m.NAME == "lab-teardown":
+            continue
+        if current is not None:
+            line(f"{m.NUM:>2} {m.NAME}", "not reached")
+            continue
+        result = m.grade()
+        if result.passed:
+            line(f"{m.NUM:>2} {m.NAME}", "PASS")
+        else:
+            current = result
+            line(f"{m.NUM:>2} {m.NAME}", "in progress" if result.started else "not started")
+    print()
+    if current is None:
+        print(f"{BOLD}Every exercise is complete.{OFF} lab-teardown removes the lab when you are done with it.")
+        return 0
+    failure = current.first_failure
+    print(f"{BOLD}Current exercise: {current.name} ({current.title}).{OFF}")
+    if failure:
+        print(f"Next to do: {failure[1]}")
+        hint(failure[2])
+    print(f"Details: lab grade {current.name}")
+    return 1
+
+
+def cmd_start(name):
+    mod = exercise(name)
+    print(f"\nStarting the {name} exercise.\n")
+    for prev in earlier(mod):
+        result = prev.grade()
+        line(f"Checking that {prev.NAME} is complete", "SUCCESS" if result.passed else "FAIL")
+        if not result.passed:
+            failure = result.first_failure
+            if failure:
+                hint(f"{failure[1]}: {failure[2]}")
+            print(f"\n{BOLD}Cannot start {name}.{OFF} Complete {prev.NAME} first: lab grade {prev.NAME}")
+            return 1
+    if not earlier(mod):
+        line("No earlier exercise is required", "SUCCESS")
+    print(f"\n{BOLD}Ready.{OFF} Exercise {mod.NUM}: {mod.TITLE}.")
+    return 0
+
+
+def cmd_grade(name):
+    mod = exercise(name)
+    print(f"\nGrading the student's work for the {name} exercise.\n")
+    result = mod.grade()
+    show_steps(result)
+    verdict = "PASS" if result.passed else "FAIL"
+    print(f"\n{BOLD}Overall lab grade:{OFF} {COLOUR[verdict]}{verdict}{OFF}")
+    return 0 if result.passed else 1
+
+
+def cmd_finish(name):
+    mod = exercise(name)
+    print(f"\nFinishing the {name} exercise.\n")
+    result = mod.grade()
+    line(f"Checking that {name} is complete", "SUCCESS" if result.passed else "FAIL")
+    if not result.passed:
+        print(f"\n{BOLD}Not complete yet.{OFF} See what is missing: lab grade {name}")
+        return 1
+    following = grading.EXERCISES[grading.EXERCISES.index(mod) + 1:]
+    if following:
+        line("Nothing to clean up: later exercises build on this one", "SUCCESS")
+        print(f"\n{BOLD}Exercise complete.{OFF} Next: {following[0].NAME} ({following[0].TITLE}).")
+    else:
+        print(f"\n{BOLD}The lab's VMs and network are removed.{OFF} Delete the working folder to finish.")
+    return 0
+
+
+def main(argv):
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return 0
+    verb, rest = argv[0], argv[1:]
+    if verb == "list" and not rest:
+        return cmd_list()
+    if verb == "status" and not rest:
+        return cmd_status()
+    if verb in ("start", "grade", "finish") and len(rest) == 1:
+        return {"start": cmd_start, "grade": cmd_grade, "finish": cmd_finish}[verb](rest[0])
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Create the lab network</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 1 <span class="exname">network-create</span></p>
+<h1>Create the lab network</h1>
+<p class="lede">Work from <code>~/edgelab</code>, the folder you prepared in <a href="00-prerequisites.html">Prerequisites</a>. Give the lab its own network, so the server and devices find each other by name and nothing depends on, or leaks into, your home LAN.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>An SSH key made for this lab only.</li>
+  <li>A libvirt network <code>rhem-lab</code> (192.168.160.0/24) with DHCP, DNS for <code>lab.internal</code>, and NAT to the internet.</li>
+</ul>
+</div>
+
+<h2>Before you begin</h2>
+<p>On the workstation, in <code>~/edgelab</code>, confirm that the earlier exercises are complete:</p>
+<pre class="cmd" data-on="host">
+./lab start network-create
+</pre>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Make an SSH key for the lab</h2>
+<pre class="cmd" data-on="host">
+ssh-keygen -q -t ed25519 -N '' -C edgelab -f keys/id_ed25519
+cat ssh_config
+</pre>
+<ul>
+  <li>The key is only for lab VMs. You never put your personal key into images that devices boot from.</li>
+  <li><code>ssh_config</code> names the lab VMs, their addresses, the login user and this key. That is why logging in is always <code>ssh -F ~/edgelab/ssh_config NAME</code>, and why nothing is added to your own SSH configuration.</li>
+</ul>
+</section>
+
+<section class="step">
+<h2>Read the network definition</h2>
+<pre class="cmd" data-on="host">
+cat network.xml
+</pre>
+<p>The parts that matter later:</p>
+<table>
+<tr><th>Element</th><th>What it does</th><th>Effect on the lab</th></tr>
+<tr><td><code>&lt;forward mode='nat'/&gt;</code></td><td>VMs reach the internet through the workstation; nothing outside can reach them.</td><td>The server can pull from Red Hat's registry and CDN. Your LAN never sees the lab.</td></tr>
+<tr><td><code>&lt;domain name='lab.internal' localOnly='yes'/&gt;</code></td><td>libvirt's DNS answers for this domain itself and never forwards it upstream.</td><td>Devices find the server as <code>rhem.lab.internal</code>. That name is baked into certificates and device images in later modules.</td></tr>
+<tr><td><code>&lt;host mac=… name=… ip=…/&gt;</code></td><td>A fixed DHCP lease, and a DNS record for the name.</td><td>Each VM always gets the same address, so the guide's addresses stay true.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why DNS and not IP addresses?</b> An agent is told where its server is by name, inside the device image. If devices used an IP address, moving the server would mean rebuilding every device. With a name, you only change what the name points to.</p></div>
+</section>
+
+<section class="step">
+<h2>Create and start the network</h2>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system net-define network.xml
+virsh -c qemu:///system net-start rhem-lab
+virsh -c qemu:///system net-list --all
+ip -br addr show virbr-rhem
+</pre>
+<pre class="out">
+ Name       State    Autostart   Persistent
+---------------------------------------------
+ default    active   yes         yes
+ rhem-lab   active   no          yes
+
+virbr-rhem       DOWN           192.168.160.1/24
+</pre>
+<ul>
+  <li><code>-c qemu:///system</code> selects the system-wide libvirt, where VMs can share a real network. Without it, <code>virsh</code> talks to your personal libvirt, which cannot. Every <code>virsh</code> command in this lab includes it.</li>
+  <li><code>net-define</code> stores the definition; <code>net-start</code> creates the bridge <code>virbr-rhem</code> and starts a <code>dnsmasq</code> process for DHCP and DNS on it.</li>
+  <li>The bridge shows <code>DOWN</code> until the first VM is attached. That is normal.</li>
+  <li>Autostart is off on purpose: after a workstation reboot, run <code>virsh -c qemu:///system net-start rhem-lab</code> before starting the VMs.</li>
+</ul>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade network-create
+</pre>
+<p>You can also look yourself:</p>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system net-dumpxml rhem-lab
+</pre>
+<p>The output is the network as libvirt stored it. You should see the domain <code>lab.internal</code> and four <code>host</code> entries: <code>rhem</code>, <code>edge-1</code>, <code>edge-2</code>, <code>edge-3</code>.</p>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish network-create
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

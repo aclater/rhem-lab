@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Create the server VM</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 2 <span class="exname">server-create</span></p>
+<h1>Create the server VM</h1>
+<p class="lede">Create the RHEL 9 machine that will run Edge Manager. It starts from Red Hat's ready-made KVM guest image, so there is no installer to go through.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>A VM <code>rhem</code> at 192.168.160.10 (<code>rhem.lab.internal</code>): 4 vCPUs, 6 GiB RAM, 80 GB disk.</li>
+  <li>You can log in with <code>ssh -F ~/edgelab/ssh_config rhem</code> as user <code>cloud-user</code>, with sudo.</li>
+</ul>
+</div>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Sizing.</b> Red Hat's stated minimum for Edge Manager is 4 vCPUs, 4 GB RAM and 70 GB disk for up to 100 devices. This VM gets 6 GiB because it also runs the registry and builds your device images: the largest step in this lab, building the device disk image, peaked at 4.6 GiB in use. The sizes in this lab are chosen so that all four VMs fit on a laptop with 16 GB of memory.</p></div>
+
+<h2>Before you begin</h2>
+<p>On the workstation, in <code>~/edgelab</code>, confirm that the earlier exercises are complete:</p>
+<pre class="cmd" data-on="host">
+./lab start server-create
+</pre>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Make the disk</h2>
+<pre class="cmd" data-on="host">
+cp --sparse=always inputs/rhel-9.8-x86_64-kvm.qcow2 images/rhem.qcow2
+qemu-img resize images/rhem.qcow2 80G
+qemu-img info images/rhem.qcow2
+</pre>
+<pre class="out">
+image: images/rhem.qcow2
+file format: qcow2
+virtual size: 80 GiB (85899345920 bytes)
+disk size: 1.28 GiB
+...output omitted...
+</pre>
+<ul>
+  <li>The guest image is a complete, minimal RHEL install in a 10 GB disk. You copy it, so the original stays untouched.</li>
+  <li><code>resize</code> only raises the size the VM will see. The file grows as data is written, which is why it still uses about 1.3 GB.</li>
+</ul>
+</section>
+
+<section class="step">
+<h2>Create the VM</h2>
+<p><code>virt-install</code> is the standard tool for creating a libvirt VM from the command line. One command defines the VM and starts it:</p>
+<pre class="cmd" data-on="host">
+virt-install --connect qemu:///system --name rhem --memory 6144 --vcpus 4 \
+  --import --disk images/rhem.qcow2 --osinfo rhel9-unknown \
+  --network network=rhem-lab,mac=52:54:00:a0:00:10 \
+  --cloud-init clouduser-ssh-key=keys/id_ed25519.pub \
+  --boot uefi --graphics none --noautoconsole
+</pre>
+<pre class="out">
+Starting install...
+Allocating 'virtinst-…-cloudinit.iso'
+Transferring 'virtinst-…-cloudinit.iso'
+Creating domain...
+
+Domain is still running. Installation may be in progress.
+</pre>
+<table>
+<tr><th>Option</th><th>Meaning</th><th>Effect on the lab</th></tr>
+<tr><td><code>--name rhem --memory 6144 --vcpus 4</code></td><td>The VM's name in libvirt, its RAM in MiB, and its CPU count.</td><td>Every later <code>virsh</code> command refers to it as <code>rhem</code>.</td></tr>
+<tr><td><code>--import --disk images/rhem.qcow2</code></td><td>Boot the existing disk as it is, instead of running an installer.</td><td>The disk you just made becomes the server.</td></tr>
+<tr><td><code>--osinfo rhel9-unknown</code></td><td>Tells libvirt this is a RHEL 9 guest, so it picks suitable virtual hardware (virtio disk and network).</td><td>"unknown" means "RHEL 9, any minor release"; older tool versions do not know 9.8 by name.</td></tr>
+<tr><td><code>--network network=rhem-lab,mac=…:10</code></td><td>Connect to the lab network with this exact MAC address.</td><td>The address is the one <code>network.xml</code> ties to the name <code>rhem</code> and to 192.168.160.10. That is how the VM gets its identity on the network.</td></tr>
+<tr><td><code>--cloud-init clouduser-ssh-key=keys/id_ed25519.pub</code></td><td>The guest image has no users you can log in as. On first boot, <b>cloud-init</b> inside it reads settings from a small extra disk, which <code>virt-install</code> builds for you from this option.</td><td>Your lab public key is installed for the image's built-in user, <code>cloud-user</code>, who has passwordless sudo. cloud-init also grows the filesystem to fill the 80 GB disk. No password logins exist.</td></tr>
+<tr><td><code>--boot uefi</code></td><td>UEFI firmware, with Secure Boot.</td><td>The same firmware type the edge devices use later.</td></tr>
+<tr><td><code>--graphics none --noautoconsole</code></td><td>No graphical display, and do not attach your terminal to the VM's console.</td><td>The command returns immediately and the VM boots in the background.</td></tr>
+</table>
+<p>The message about an installation in progress is <code>virt-install</code>'s standard wording; nothing is being installed. To watch the VM boot, use <code>virsh -c qemu:///system console rhem</code> (leave with <kbd>Ctrl</kbd>+<kbd>]</kbd>).</p>
+</section>
+
+<section class="step">
+<h2>Log in</h2>
+<p>First boot takes about 30 seconds. Then:</p>
+<pre class="cmd" data-on="host">
+ssh -F ~/edgelab/ssh_config rhem
+</pre>
+<p>You are now inside the server, as <code>cloud-user</code>. Check what you got:</p>
+<pre class="cmd" data-on="rhem">
+cat /etc/redhat-release
+hostname -f
+df -h /
+nproc
+free -g
+</pre>
+<pre class="out">
+Red Hat Enterprise Linux release 9.8 (Plow)
+rhem.lab.internal
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/vda4        79G  2.2G   77G   3% /
+4
+               total        used        free      shared  buff/cache   available
+Mem:               5           0           5           0           0           5
+Swap:              0           0           0
+</pre>
+<ul>
+  <li>If <code>ssh</code> says "connection refused" or times out, the VM is still booting; try again.</li>
+  <li>The name <code>rhem.lab.internal</code> was not set inside the VM. The lab network handed it out along with the address. Edge Manager is told this name explicitly in the next module.</li>
+</ul>
+<p>Leave the VM with <code>exit</code> for the next step.</p>
+</section>
+
+<section class="step">
+<h2>Restart it once</h2>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system shutdown rhem
+virsh -c qemu:///system domstate rhem
+</pre>
+<p>Repeat the second command until it prints <code>shut off</code> (a few seconds). Then:</p>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system start rhem
+virsh -c qemu:///system domstate rhem
+</pre>
+<pre class="out">
+Domain 'rhem' started
+
+running
+</pre>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why restart a VM that works?</b> <code>virt-install</code> treats the first boot as an installation: the cloud-init disk is attached only for that boot, and the first time the VM restarts it powers off instead, so the disk can be removed. Doing that now, on purpose, means a later reboot behaves normally instead of leaving your server switched off. After this, the VM's definition is final.</p></div>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade server-create
+</pre>
+<p>You can also check by hand:</p>
+<ul>
+  <li><code>hostname -f</code> prints <code>rhem.lab.internal</code>.</li>
+  <li>The root filesystem is about 79 GB.</li>
+  <li><code>sudo -n true &amp;&amp; echo ok</code> prints <code>ok</code>.</li>
+</ul>
+<p>Keep this terminal open: it is your <b>rhem VM</b> terminal for the next modules.</p>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish server-create
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

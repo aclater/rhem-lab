@@ -1,0 +1,100 @@
+# Appendix B: set up a student workstation from the classroom kit. Needs no internet and no Red Hat account.
+# Run on the student workstation, in the kit folder:
+#
+#   ansible-playbook guide/ansible/classroom-student.yml
+#
+# It checks the workstation and the kit, then creates the working folder ~/edgelab as "Prepare the workstation" does.
+
+- name: Set up the workstation from the classroom kit
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: vars.yml
+  vars:
+    kit: "{{ playbook_dir | dirname | dirname }}"
+  tasks:
+    - name: Check that this is a classroom kit
+      ansible.builtin.stat:
+        path: "{{ kit }}/SHA256SUMS"
+      register: sums
+      failed_when: not sums.stat.exists
+
+    - name: Check that KVM is available
+      ansible.builtin.stat:
+        path: /dev/kvm
+      register: kvm
+      failed_when: not kvm.stat.exists
+
+    - name: Check that you can manage system VMs
+      ansible.builtin.command: "{{ virsh }} list --all"
+      changed_when: false
+
+    - name: Check that the lab's tools are installed
+      ansible.builtin.shell: 'command -v {{ item }} || { echo "{{ item }} is not installed" >&2; exit 1; }'
+      loop: [virt-install, qemu-img, make, openssl]
+      changed_when: false
+
+    - name: Read the free space in your home folder
+      ansible.builtin.command: "df --output=avail -BG {{ lookup('env', 'HOME') }}"
+      register: space
+      changed_when: false
+
+    - name: Check that 60 GB is free
+      ansible.builtin.assert:
+        that: (space.stdout_lines | last | trim | regex_replace('G$', '') | int) >= 60
+        fail_msg: "The lab needs 60 GB free in your home folder."
+
+    - name: Check the kit's files against their checksums
+      ansible.builtin.command: sha256sum --quiet -c SHA256SUMS
+      args:
+        chdir: "{{ kit }}"
+      changed_when: false
+
+    - name: Create the working folder
+      ansible.builtin.file:
+        path: "{{ lab_dir }}/{{ item.name }}"
+        state: directory
+        mode: "{{ item.mode }}"
+      loop:
+        - { name: "", mode: "0755" }
+        - { name: guide, mode: "0755" }
+        - { name: images, mode: "0755" }
+        - { name: keys, mode: "0700" }
+        - { name: inputs, mode: "0755" }
+        - { name: offline, mode: "0755" }
+      loop_control:
+        label: "{{ lab_dir }}/{{ item.name }}"
+
+    - name: Turn off copy-on-write for VM disks, where the file system has it
+      ansible.builtin.command: "chattr +C {{ lab_dir }}/images"
+      changed_when: false
+      failed_when: false
+
+    - name: Let the VM service pass through your home folder to the disk images
+      ansible.builtin.file:
+        path: "{{ lookup('env', 'HOME') }}"
+        mode: o+x
+
+    - name: Copy the guide
+      ansible.builtin.shell: "tar -C {{ kit }}/guide -cf - . | tar -xf - -C {{ lab_dir }}/guide"
+
+    - name: Copy the lab files into the working folder
+      ansible.builtin.shell: "cp {{ lab_dir }}/guide/files/* {{ lab_dir }}/"
+
+    - name: Link the lab command
+      ansible.builtin.file:
+        src: guide/lab
+        dest: "{{ lab_dir }}/lab"
+        state: link
+
+    - name: Copy the guest image and the offline files
+      ansible.builtin.command: "cp --reflink=auto {{ kit }}/{{ item }} {{ lab_dir }}/{{ item }}"
+      args:
+        creates: "{{ lab_dir }}/{{ item }}"
+      loop: "{{ ['inputs/' + (guest_image | basename)] + offline_files | map('regex_replace', '^', 'offline/') | list }}"
+
+    - name: What to do next
+      ansible.builtin.debug:
+        msg: >-
+          The working folder {{ lab_dir }} is ready. Go there, start the guide with "make -C guide serve",
+          and begin at "Run the lab disconnected", part 2.

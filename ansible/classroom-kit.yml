@@ -1,0 +1,65 @@
+# Appendix B: assemble the classroom kit, one folder that holds everything a student workstation needs.
+# Run on the instructor's workstation, in ~/edgelab, after disconnected-prepare.yml:
+#
+#   ansible-playbook guide/ansible/classroom-kit.yml
+#
+# The kit is written to ~/edgelab/classroom-kit. It holds no Red Hat account details.
+
+- name: Assemble the classroom kit
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: vars.yml
+  vars:
+    guide_dir: "{{ playbook_dir | dirname }}"
+  tasks:
+    - name: Check the guest image and the four offline files
+      ansible.builtin.stat:
+        path: "{{ item }}"
+        get_checksum: false
+      register: sources
+      failed_when: not sources.stat.exists
+      loop: "{{ [guest_image] + offline_files | map('regex_replace', '^', lab_dir + '/offline/') | list }}"
+
+    - name: Create the kit folders
+      ansible.builtin.file:
+        path: "{{ kit_dir }}/{{ item }}"
+        state: directory
+        mode: "0755"
+      loop: [guide, inputs, offline]
+
+    - name: Copy the guide, without its history or local state
+      ansible.builtin.shell: >-
+        tar -C {{ guide_dir }} --exclude=.git --exclude=__pycache__ --exclude=".serve*" -cf - . |
+        tar -xf - -C {{ kit_dir }}/guide
+
+    - name: Copy the guest image
+      ansible.builtin.command: "cp --reflink=auto {{ guest_image }} {{ kit_dir }}/inputs/{{ guest_image | basename }}"
+      args:
+        creates: "{{ kit_dir }}/inputs/{{ guest_image | basename }}"
+
+    - name: Copy the offline files
+      ansible.builtin.command: "cp --reflink=auto {{ lab_dir }}/offline/{{ item }} {{ kit_dir }}/offline/{{ item }}"
+      args:
+        creates: "{{ kit_dir }}/offline/{{ item }}"
+      loop: "{{ offline_files }}"
+
+    - name: Add the student instructions
+      ansible.builtin.copy:
+        src: files/classroom-README.txt
+        dest: "{{ kit_dir }}/README.txt"
+        mode: "0644"
+
+    - name: Record checksums, so each workstation can check its copy
+      ansible.builtin.shell: "sha256sum inputs/* offline/* > SHA256SUMS"
+      args:
+        chdir: "{{ kit_dir }}"
+
+    - name: Measure the kit
+      ansible.builtin.command: "du -sh {{ kit_dir }}"
+      register: size
+      changed_when: false
+
+    - name: The kit
+      ansible.builtin.debug:
+        msg: "{{ size.stdout }}. Copy this folder to each student workstation, or to portable media."

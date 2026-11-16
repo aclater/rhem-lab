@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manage devices as a fleet</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 8 <span class="exname">fleet-create</span></p>
+<h1>Manage devices as a fleet</h1>
+<p class="lede">Stop thinking about individual devices. A fleet is one description of what a kind of device should run, applied to every device whose labels match.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>A fleet <code>lab</code> that selects all devices labelled <code>site=lab</code>.</li>
+  <li>All three devices owned by the fleet, with their OS image pinned by it.</li>
+</ul>
+</div>
+
+<h2>Before you begin</h2>
+<p>On the workstation, in <code>~/edgelab</code>, confirm that the earlier exercises are complete:</p>
+<pre class="cmd" data-on="host">
+./lab start fleet-create
+</pre>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Write the fleet</h2>
+<p>This is the first YAML file you write for Edge Manager. Paste the block, or create it with <code>vi ~/fleet/lab-fleet.yaml</code>; if you enter it by hand, use spaces only, two per level (<a href="index.html#typing">the rules, and how to check your file</a>).</p>
+<pre class="cmd" data-on="rhem">
+mkdir ~/fleet
+cat > ~/fleet/lab-fleet.yaml &lt;&lt;'EOF'
+apiVersion: flightctl.io/v1beta1
+kind: Fleet
+metadata:
+  name: lab
+spec:
+  selector:
+    matchLabels:
+      site: lab
+  template:
+    spec:
+      os:
+        image: rhem.lab.internal:8443/admin/edge-os:v1
+EOF
+</pre>
+<table>
+<tr><th>Part</th><th>Meaning</th></tr>
+<tr><td><code>selector.matchLabels</code></td><td>Which devices belong: every device carrying the label <code>site=lab</code>. You set that label when you approved the devices.</td></tr>
+<tr><td><code>template.spec</code></td><td>What each of those devices should look like. This is the same structure as a single device's <code>spec</code>.</td></tr>
+<tr><td><code>os.image</code></td><td>The OS image the devices must run. They already run <code>v1</code>, so nothing will change on them yet; the fleet now <i>owns</i> that decision.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Keep this file.</b> It is the source of truth for your devices. In a real deployment it lives in git, and every change to the edge is a reviewed change to a file like this one. Edge Manager can also read fleets straight from a git repository.</p></div>
+</section>
+
+<section class="step">
+<h2>Apply it</h2>
+<pre class="cmd" data-on="rhem">
+flightctl apply -f ~/fleet/lab-fleet.yaml
+flightctl get fleets
+flightctl get devices
+</pre>
+<pre class="out">
+/home/cloud-user/fleet/lab-fleet.yaml: applying fleet/lab: 201 Created
+NAME   OWNER    SELECTOR   VALID
+lab    &lt;none&gt;   site=lab   True
+
+NAME      ALIAS    OWNER       SYSTEM   UPDATED    APPLICATIONS     SYSTEM INFO
+0hv9…     edge-2   Fleet/lab   Online   UpToDate   NoApplications   Healthy
+1jn3…     edge-1   Fleet/lab   Online   UpToDate   NoApplications   Healthy
+jds0…     edge-3   Fleet/lab   Online   UpToDate   NoApplications   Healthy
+</pre>
+<p>The <code>OWNER</code> column changes to <code>Fleet/lab</code> within a few seconds. Nobody listed the devices: the label did it.</p>
+</section>
+
+<section class="step">
+<h2>See what the fleet did to a device</h2>
+<pre class="cmd" data-on="rhem">
+flightctl get devices -l alias=edge-1 -o yaml | less
+</pre>
+<p><code>-l alias=edge-1</code> selects the device by its label, so you do not need its long name. In <code>less</code>, enter <code>/owner</code> to jump to the part shown here; <code>q</code> quits.</p>
+<pre class="out">
+    labels:
+      alias: edge-1
+      site: lab
+      …
+    name: 1jn34ajbcdc1vhliuj5s7suq3ja49g5vjdqu101am2b9jgsrtd20
+    owner: Fleet/lab
+  spec:
+    os:
+      image: rhem.lab.internal:8443/admin/edge-os:v1
+  status:
+</pre>
+<p>The device's <code>spec</code> is now a copy of the fleet's template, and <code>owner</code> records where it came from. The chain is:</p>
+<pre class="diagram">
+ fleet template  ──(server copies it to every matching device)──▶  device spec
+ device spec     ──(agent fetches it on its next check-in)──────▶  device makes itself match
+ device status   ◀─(agent reports what is actually running)──────  device
+</pre>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why this matters at the edge.</b> The server never pushes anything. It only records what each device <i>should</i> be. A device that is offline for a week simply fetches the current spec when it comes back, and skips everything in between. That is what makes fleets work over unreliable links.</p></div>
+</section>
+
+<section class="step">
+<h2>Understand what "declarative" means here</h2>
+<p>Three rules to keep in mind before you start changing things. All three were observed on RHEM 1.4.0 while writing this guide:</p>
+<table>
+<tr><th>Rule</th><th>What happens</th></tr>
+<tr><td>The template is the whole truth.</td><td>Whatever the template does not list is removed from the devices. A fleet with no <code>applications</code> section uninstalls every application Edge Manager had deployed.</td></tr>
+<tr><td>Membership follows labels.</td><td>A new device approved with <code>site=lab</code> joins the fleet and receives the template without anyone touching the fleet.</td></tr>
+<tr><td>Deleting a fleet does not wipe devices.</td><td>The devices keep their last spec and keep running it; they just have no owner any more.</td></tr>
+</table>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade fleet-create
+</pre>
+<p>You can also look yourself:</p>
+<pre class="cmd" data-on="rhem">
+flightctl get devices
+</pre>
+<p>All three devices show <code>Fleet/lab</code> in the <code>OWNER</code> column.</p>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish fleet-create
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

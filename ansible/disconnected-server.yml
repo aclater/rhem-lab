@@ -1,0 +1,252 @@
+# Appendix A, part 2: build the disconnected network and a server VM that is ready for Edge Manager,
+# from the four files in ~/edgelab/offline. Needs no internet. Run on the workstation, in ~/edgelab:
+#
+#   ansible-playbook guide/ansible/disconnected-server.yml
+#
+# It stops where the appendix says "Configure and start Edge Manager". From there, follow the guide.
+
+- name: Create the disconnected network and the server VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: vars.yml
+  tasks:
+    - name: Check the four offline files
+      ansible.builtin.stat:
+        path: "{{ lab_dir }}/offline/{{ item }}"
+      register: carried
+      failed_when: not carried.stat.exists
+      loop: "{{ offline_files }}"
+
+    - name: Look for the lab network
+      ansible.builtin.command: "{{ virsh }} net-dumpxml {{ libvirt_network }}"
+      register: net_xml
+      changed_when: false
+      failed_when: false
+
+    - name: Stop if the lab network is the connected one
+      ansible.builtin.fail:
+        msg: >-
+          The network {{ libvirt_network }} exists and has a route out. Remove it first:
+          {{ virsh }} net-destroy {{ libvirt_network }}; {{ virsh }} net-undefine {{ libvirt_network }}
+      when: net_xml.rc == 0 and '<forward' in net_xml.stdout
+
+    - name: Create the disconnected lab network
+      ansible.builtin.command: "{{ virsh }} {{ item }}"
+      loop:
+        - "net-define {{ disconnected_network_xml }}"
+        - "net-start {{ libvirt_network }}"
+      when: net_xml.rc != 0
+
+    - name: Create the lab SSH key if there is none
+      ansible.builtin.command: "ssh-keygen -q -t ed25519 -N '' -C edgelab -f {{ lab_dir }}/keys/id_ed25519"
+      args:
+        creates: "{{ lab_dir }}/keys/id_ed25519"
+
+    - name: Create the server VM
+      ansible.builtin.include_tasks: tasks/create-vm.yml
+      vars:
+        vm_host: rhem
+        vm_mac: "52:54:00:a0:00:10"
+        vm_memory: 6144
+        vm_vcpus: 4
+        vm_disk_size: 80G
+
+- name: Prepare the server for a disconnected install
+  hosts: rhem
+  gather_facts: false
+  vars_files: vars.yml
+  vars:
+    home: /home/cloud-user
+    vm: "{{ vm_prefix }}rhem"
+  tasks:
+    - name: Wait for the server VM
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Wait for the first boot to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    # virt-install powers a cloud-init VM off at its first reboot. Do that now, on purpose.
+    - name: Restart a newly created VM once
+      when: hostvars['localhost'].vm_created
+      delegate_to: localhost
+      block:
+        - name: Shut the VM down
+          ansible.builtin.command: "{{ virsh }} shutdown {{ vm }}"
+
+        - name: Wait until it is shut off
+          ansible.builtin.command: "{{ virsh }} domstate {{ vm }}"
+          register: state
+          until: "'shut off' in state.stdout"
+          retries: 30
+          delay: 2
+          changed_when: false
+
+        - name: Start it again
+          ansible.builtin.command: "{{ virsh }} start {{ vm }}"
+
+    - name: Wait for the server VM again
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Check that the server has a default route, which Edge Manager's first start needs
+      ansible.builtin.command: ip route show default
+      register: route
+      changed_when: false
+      failed_when: "'default' not in route.stdout"
+
+    - name: See which offline files the server already has
+      ansible.builtin.stat:
+        path: "{{ home }}/{{ item }}"
+        get_checksum: false
+      register: present
+      loop: "{{ offline_files }}"
+
+    - name: Copy the offline files to the server
+      ansible.builtin.command: "scp -F {{ ssh_config }} {{ lab_dir }}/offline/{{ item.item }} rhem:"
+      loop: "{{ present.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: not item.stat.exists
+      delegate_to: localhost
+
+    - name: Unpack the bundle
+      ansible.builtin.shell: "mkdir -p {{ home }}/rhem-bundle && tar -xzf {{ home }}/rhem-bundle.tar.gz -C {{ home }}/rhem-bundle"
+      args:
+        creates: "{{ home }}/rhem-bundle/install-rpms.sh"
+
+    - name: See whether the packages are installed
+      ansible.builtin.command: rpm -q flightctl-services flightctl-cli podman skopeo
+      register: packages
+      changed_when: false
+      failed_when: false
+
+    - name: Install the packages from the bundle
+      ansible.builtin.command: ./install-rpms.sh
+      args:
+        chdir: "{{ home }}/rhem-bundle"
+      when: packages.rc != 0
+
+    - name: Load the registry image from the bundle
+      ansible.builtin.command: >-
+        skopeo copy dir:{{ home }}/rhem-bundle/images/library/registry:2
+        containers-storage:docker.io/library/registry:2
+      become: true
+
+    - name: Create the local registry's data folder
+      ansible.builtin.file:
+        path: "{{ home }}/registry-data"
+        state: directory
+        mode: "0755"
+
+    - name: See whether the local registry exists
+      ansible.builtin.command: podman container exists local-registry
+      become: true
+      register: registry
+      changed_when: false
+      failed_when: false
+
+    - name: Start the local registry
+      ansible.builtin.command: >-
+        podman run -d --name local-registry --network=host --security-opt label=disable
+        -v {{ home }}/registry-data:/var/lib/registry --restart=always docker.io/library/registry:2
+      become: true
+      when: registry.rc != 0
+
+    - name: Start the local registry again after a reboot
+      ansible.builtin.systemd:
+        name: podman-restart.service
+        enabled: true
+      become: true
+
+    - name: Wait for the local registry to answer
+      ansible.builtin.uri:
+        url: http://localhost:5000/v2/
+      register: answer
+      until: answer.status == 200
+      retries: 15
+      delay: 2
+
+    - name: Import the bundled images
+      ansible.builtin.command: ./import.sh
+      args:
+        chdir: "{{ home }}/rhem-bundle"
+      become: true
+
+    - name: Unpack the gateway image
+      ansible.builtin.command: "tar -xf {{ home }}/gateway-image.tar -C {{ home }}"
+      args:
+        creates: "{{ home }}/gateway-image"
+
+    - name: Import the gateway image
+      ansible.builtin.command: >-
+        skopeo copy --dest-tls-verify=false dir:{{ home }}/gateway-image
+        docker://localhost:5000/{{ gateway_image }}
+      become: true
+
+    - name: Answer pulls from the public registries with the local one
+      ansible.builtin.blockinfile:
+        path: /etc/containers/registries.conf
+        marker: "# {mark} disconnected lab"
+        block: |
+          [[registry]]
+          prefix = "registry.redhat.io"
+          location = "localhost:5000"
+          insecure = true
+
+          [[registry]]
+          prefix = "registry.access.redhat.com"
+          location = "localhost:5000"
+          insecure = true
+
+          [[registry]]
+          prefix = "quay.io"
+          location = "localhost:5000"
+          insecure = true
+
+          [[registry]]
+          prefix = "docker.io"
+          location = "localhost:5000"
+          insecure = true
+      become: true
+
+    - name: Read image signatures from the server, not from the internet
+      ansible.builtin.replace:
+        path: "/etc/containers/registries.d/{{ item }}.yaml"
+        regexp: '^(\s*)sigstore:.*$'
+        replace: '\1sigstore: file:///var/lib/containers/sigstore'
+      loop:
+        - registry.redhat.io
+        - registry.access.redhat.com
+      become: true
+
+    - name: Test a pull, answered locally with its signature verified
+      ansible.builtin.command: podman pull registry.redhat.io/rhel9/postgresql-16:9.7-1766414426
+      become: true
+
+    - name: Unpack the mirror registry installer
+      ansible.builtin.shell: "mkdir -p {{ home }}/mirror-registry && tar -xzf {{ home }}/mirror-registry.tar.gz -C {{ home }}/mirror-registry"
+      args:
+        creates: "{{ home }}/mirror-registry/mirror-registry"
+
+    - name: See whether the lab's base images are loaded
+      ansible.builtin.command: "podman image exists {{ lab_images | first }}"
+      become: true
+      register: loaded
+      changed_when: false
+      failed_when: false
+
+    - name: Load the lab's base images
+      ansible.builtin.command: "podman load -i {{ home }}/lab-images.tar"
+      become: true
+      when: loaded.rc != 0
+
+    - name: What to do next
+      ansible.builtin.debug:
+        msg: >-
+          The server is ready. Continue in the guide with "Install Red Hat Edge Manager" from step 5,
+          "Tell Edge Manager its name". In "Install a registry", skip step 1: the installer is already
+          unpacked in ~/mirror-registry.

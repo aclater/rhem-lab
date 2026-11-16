@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install Red Hat Edge Manager</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 3 <span class="exname">rhem-install</span></p>
+<h1>Install Red Hat Edge Manager</h1>
+<p class="lede">Register the server with Red Hat, install the Edge Manager packages, tell it its name, and start it. Then look at what is actually running.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>RHEM 1.4.0 running on <code>rhem</code> as 17 containers managed by systemd.</li>
+  <li>Its own certificate authority (CA), created on first start, in <code>/etc/flightctl/pki</code>.</li>
+  <li>You know which service does what, and where state lives.</li>
+</ul>
+</div>
+
+<h2>Before you begin</h2>
+<p>On the workstation, in <code>~/edgelab</code>, confirm that the earlier exercises are complete:</p>
+<pre class="cmd" data-on="host">
+./lab start rhem-install
+</pre>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Register the server with Red Hat</h2>
+<p>RHEL can only install packages from Red Hat's CDN after it is registered. You register with the organization ID and activation key that you saved in module 0. Display them on the workstation:</p>
+<pre class="cmd" data-on="host">
+cat inputs/rhsm-activation
+</pre>
+<pre class="out">
+org=1234567
+key=my-activation-key
+</pre>
+<p>Then, in the server VM, register with those two values. This is the one command in the lab where you enter values of your own: put your organization ID after <code>--org</code> and your activation key after <code>--activationkey</code>.</p>
+<pre class="file">
+sudo subscription-manager register --org <i>&lt;organization_id&gt;</i> --activationkey <i>&lt;activation_key&gt;</i>
+</pre>
+<p>With the example values shown above, the command would be:</p>
+<pre class="file">
+sudo subscription-manager register --org 1234567 --activationkey my-activation-key
+</pre>
+<pre class="out">
+The system has been registered with ID: …
+The registered system name is: rhem.lab.internal
+</pre>
+<p>If you do not have an activation key, <code>sudo subscription-manager register</code> with no options asks for your Red Hat login and password instead.</p>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why an activation key?</b> It registers a machine without a person's username and password. That is the same method you would use to register hundreds of servers, or to build images in a pipeline.</p></div>
+</section>
+
+<section class="step">
+<h2>Enable the Edge Manager repository</h2>
+<pre class="cmd" data-on="rhem">
+sudo subscription-manager repos --list | grep edge-manager-1.4
+</pre>
+<pre class="out">
+Repo ID:   edge-manager-1.4-for-rhel-9-x86_64-rpms
+Repo ID:   edge-manager-1.4-for-rhel-9-x86_64-debug-rpms
+Repo ID:   edge-manager-1.4-for-rhel-9-x86_64-source-rpms
+</pre>
+<p>These are the repositories your subscription offers for Edge Manager 1.4. If nothing is listed, the subscription does not include Edge Manager. Enable the first one, which holds the packages, and list what is in it:</p>
+<pre class="cmd" data-on="rhem">
+sudo subscription-manager repos --enable edge-manager-1.4-for-rhel-9-x86_64-rpms
+sudo dnf list --available "flightctl*"
+</pre>
+<pre class="out">
+flightctl-agent.x86_64             1.4.0-1.el9 edge-manager-1.4-for-rhel-9-x86_64-rpms
+flightctl-catalog-collector.x86_64 1.4.0-1.el9 edge-manager-1.4-for-rhel-9-x86_64-rpms
+flightctl-cli.x86_64               1.4.0-1.el9 edge-manager-1.4-for-rhel-9-x86_64-rpms
+flightctl-greenboot.x86_64         1.4.0-1.el9 edge-manager-1.4-for-rhel-9-x86_64-rpms
+flightctl-observability.x86_64     1.4.0-1.el9 edge-manager-1.4-for-rhel-9-x86_64-rpms
+flightctl-onboarding.noarch        1.4.0-1.el9 edge-manager-1.4-for-rhel-9-x86_64-rpms
+flightctl-selinux.noarch           1.4.0-1.el9 edge-manager-1.4-for-rhel-9-x86_64-rpms
+flightctl-services.x86_64          1.4.0-1.el9 edge-manager-1.4-for-rhel-9-x86_64-rpms
+</pre>
+<p>Each Edge Manager release has its own repository. The three packages this lab uses:</p>
+<table>
+<tr><th>Package</th><th>Goes on</th><th>What it is</th></tr>
+<tr><td><code>flightctl-services</code></td><td>the server</td><td>Definitions and configuration for all the server containers.</td></tr>
+<tr><td><code>flightctl-cli</code></td><td>wherever you administer from</td><td>The <code>flightctl</code> command.</td></tr>
+<tr><td><code>flightctl-agent</code></td><td>every device</td><td>The agent. You install it into the device image in module 6.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p>The agent and the server should be the same version. This repository choice (1.4) is what you repeat when building device images.</p></div>
+</section>
+
+<section class="step">
+<h2>Install the server and the CLI</h2>
+<pre class="cmd" data-on="rhem">
+sudo dnf -y install flightctl-services flightctl-cli
+rpm -q flightctl-services flightctl-cli podman
+</pre>
+<pre class="out">
+flightctl-services-1.4.0-1.el9.x86_64
+flightctl-cli-1.4.0-1.el9.x86_64
+podman-5.8.5-3.el9_9.x86_64
+</pre>
+<p>This is small and quick: the package holds no server software itself. It installs <b>quadlets</b>, files that tell systemd to run a container as a service. Look at one:</p>
+<pre class="cmd" data-on="rhem">
+ls /usr/share/containers/systemd/
+cat /usr/share/containers/systemd/flightctl-db.container
+</pre>
+<p>In the database's file, find the <code>Image=</code> line (which container to run), the <code>Volume=flightctl-db:…</code> line (where its data is kept) and <code>Restart=always</code>.</p>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why quadlets?</b> Each service is an ordinary systemd unit: <code>systemctl status</code>, <code>journalctl -u</code>, restart on failure and start at boot all work as for any RHEL service, with no Kubernetes underneath. You use the same mechanism to run applications on the edge devices in module 9.</p></div>
+</section>
+
+<section class="step">
+<h2>Let the server pull Red Hat's container images</h2>
+<p>The Edge Manager containers come from <code>registry.redhat.io</code>, which needs a login. Your pull secret is that login. Copy it from the workstation to the server VM:</p>
+<pre class="cmd" data-on="host">
+scp -F ~/edgelab/ssh_config inputs/pull-secret.json rhem:pull-secret.json
+</pre>
+<p>In the server VM, install it as the registry login file for root's podman, and remove the copy:</p>
+<pre class="cmd" data-on="rhem">
+sudo install -D -m 0600 pull-secret.json /root/.config/containers/auth.json
+rm pull-secret.json
+</pre>
+<p>Test it by pulling a small image that needs the login:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman pull registry.redhat.io/ubi9/ubi-micro
+</pre>
+<pre class="out">
+Trying to pull registry.redhat.io/ubi9/ubi-micro:latest...
+...output omitted...
+Writing manifest to image destination
+</pre>
+<p><code>ubi-micro</code> is Red Hat's smallest base image, about 24 MB. Which image you pull does not matter here; a successful pull from <code>registry.redhat.io</code> proves the login works. An "unauthorized" error means the file is missing or in the wrong place.</p>
+<ul>
+  <li><code>/root/.config/containers/auth.json</code> is where podman, run as root, looks for registry logins. A pull secret is already in that file's format, so installing it is a copy.</li>
+  <li><code>install -D -m 0600</code> creates the folders on the way and makes the file readable by root only.</li>
+  <li>Edge Manager's services run as root, which is why the login belongs to root and not to <code>cloud-user</code>.</li>
+</ul>
+<div class="admon important"><p class="admon-title">Important</p><p><b>The file location matters.</b> Red Hat's guide uses <code>sudo podman login registry.redhat.io</code>, which stores the login under <code>/run</code> and loses it at reboot. <code>/root/.config/containers/auth.json</code> survives reboots. A wrong location shows up as every service stuck in <code>auto-restart</code> with "unable to retrieve auth token" in <code>journalctl -u flightctl-db</code>.</p></div>
+</section>
+
+<section class="step">
+<h2>Tell Edge Manager its name</h2>
+<p>One setting is required: the base domain. Everything else in <code>/etc/flightctl/service-config.yaml</code> can stay at its default for now.</p>
+<pre class="cmd" data-on="rhem">
+sudo vi /etc/flightctl/service-config.yaml
+</pre>
+<p>The fifth line of the file reads <code>  baseDomain:</code> with nothing after it. Add the server's name, so that the line reads exactly as follows, with two spaces at the start and one space after the colon. Then save and quit.</p>
+<pre class="file">
+  baseDomain: rhem.lab.internal
+</pre>
+<p>Confirm the change:</p>
+<pre class="cmd" data-on="rhem">
+head -5 /etc/flightctl/service-config.yaml
+</pre>
+<pre class="out">
+global:
+  # The base domain for the deployment, from which the service FQDNs are derived.
+  # If provided, must be a fully qualified domain name (FQDN) like "example.com" or a hostname that resolves via DNS.
+  # If not provided, defaults to the system's hostname FQDN ('hostname -f').
+  baseDomain: rhem.lab.internal
+</pre>
+<table>
+<tr><th>Setting</th><th>Value</th><th>Effect</th></tr>
+<tr><td><code>baseDomain</code></td><td><code>rhem.lab.internal</code></td><td>The name in the server's certificates, in the login redirects, and in the enrollment configuration baked into device images. <b>Changing it later means re-issuing certificates and rebuilding device images</b>, so it is chosen first.</td></tr>
+<tr><td><code>generateCertificates</code></td><td><code>builtin</code> (default)</td><td>On first start the server creates its own CA and signs its certificates with it. <code>none</code> is for bringing your own CA.</td></tr>
+<tr><td><code>auth.type</code></td><td><code>oidc</code> (default)</td><td>Logins go through an OpenID Connect provider. The bundled one checks users against Linux accounts inside its own container (module 4).</td></tr>
+</table>
+</section>
+
+<section class="step">
+<h2>Start it</h2>
+<pre class="cmd" data-on="rhem">
+sudo systemctl enable --now flightctl.target
+</pre>
+<p>The command returns in seconds, but the first start downloads about 7 GB of container images. Watch until nothing is left starting (two to five minutes; leave with <kbd>Ctrl</kbd>+<kbd>C</kbd>):</p>
+<pre class="cmd" data-on="rhem">
+watch -n 5 'systemctl list-units "flightctl*" --no-pager'
+</pre>
+<p>It is ready when the <code>ACTIVE</code> and <code>SUB</code> columns of every line read one of these:</p>
+<table>
+<tr><th>ACTIVE SUB</th><th>Seen on</th><th>Meaning</th></tr>
+<tr><td><code>active running</code></td><td>Most <code>.service</code> lines</td><td>A container that is up and stays up.</td></tr>
+<tr><td><code>active exited</code></td><td>The <code>-init</code>, <code>-migrate</code>, <code>-wait</code> and <code>-network</code> services</td><td>A one-time setup job that finished successfully: create certificates, create database users, migrate the schema.</td></tr>
+<tr><td><code>active active</code></td><td><code>flightctl.target</code>, the last line</td><td>A target is a named group of units, not a process, so it has nothing to run or exit. <code>active</code> means the group has been started.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p>While images download, services show <code>activating auto-restart</code> or <code>failed</code>. systemd keeps retrying every 30 seconds, so that clears by itself. If it does not, read <code>sudo journalctl -u flightctl-db -n 30</code>: the database is first in the chain.</p></div>
+</section>
+
+<section class="step">
+<h2>Look at what is running</h2>
+<p>A plain <code>sudo podman ps</code> prints seven columns and is too wide to read comfortably. The <code>--format</code> option chooses the columns:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman ps --format "table {{.Names}} {{.Status}}"
+</pre>
+<pre class="out">
+NAMES                          STATUS
+flightctl-cli-artifacts        Up 4 minutes
+flightctl-kv                   Up 4 minutes
+flightctl-db                   Up 4 minutes
+...output omitted...
+flightctl-ui                   Up 3 minutes
+flightctl-gateway              Up 3 minutes
+</pre>
+<ul>
+  <li><code>table</code> prints a header row and lines the columns up.</li>
+  <li>Each <code>{{.Name}}</code> is one column. The ones used most are <code>{{.Names}}</code>, <code>{{.Status}}</code>, <code>{{.Image}}</code> and <code>{{.Ports}}</code>. The same option works with <code>podman images</code> and other listing commands.</li>
+</ul>
+<p>One container publishes ports to the network. List them:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman port flightctl-gateway
+</pre>
+<pre class="out">
+8443/tcp -> 0.0.0.0:443
+3443/tcp -> 0.0.0.0:3443
+4317/tcp -> 0.0.0.0:4317
+7443/tcp -> 0.0.0.0:7443
+7444/tcp -> 0.0.0.0:7444
+8445/tcp -> 0.0.0.0:8445
+</pre>
+<p>Each line reads "port inside the container -&gt; port on the server". What each container is for:</p>
+<table>
+<tr><th>Container</th><th>Job</th></tr>
+<tr><td><code>flightctl-db</code></td><td>PostgreSQL. <b>All</b> state: devices, fleets, specs, status, events.</td></tr>
+<tr><td><code>flightctl-kv</code></td><td>Redis. Work queues and caches between the services; nothing you would need to keep.</td></tr>
+<tr><td><code>flightctl-api</code></td><td>The API, for you (CLI, UI) and for agents.</td></tr>
+<tr><td><code>flightctl-worker</code>, <code>-periodic</code></td><td>Background work: turn fleet templates into per-device specs, run rollouts, poll repositories.</td></tr>
+<tr><td><code>flightctl-gateway</code></td><td>The front door (nginx). The only container with ports open to the network.</td></tr>
+<tr><td><code>flightctl-ui</code>, <code>-cli-artifacts</code></td><td>The web console, and downloads of the CLI.</td></tr>
+<tr><td><code>flightctl-pam-issuer</code></td><td>The bundled login provider.</td></tr>
+<tr><td><code>flightctl-remote-access</code></td><td>Remote console sessions to devices.</td></tr>
+<tr><td><code>flightctl-imagebuilder-*</code>, <code>-delta-worker</code></td><td>Building device images from the UI, and delta updates. Not used in this lab.</td></tr>
+<tr><td><code>flightctl-alert*</code>, <code>-telemetry-gateway</code></td><td>Alerts and device metrics.</td></tr>
+</table>
+<p>Two ports matter:</p>
+<table>
+<tr><th>Port</th><th>Used by</th><th>How the caller proves who it is</th></tr>
+<tr><td>443</td><td>You: web UI, CLI, login</td><td>Username and password, then a token</td></tr>
+<tr><td>7443</td><td>Agents on devices</td><td>A client certificate signed by this server's CA (mutual TLS)</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Effect on the edge.</b> A device needs to reach exactly one name on one port, 7443, outbound. No inbound access to devices is ever needed, which is what makes them manageable behind NAT, firewalls and unreliable links.</p></div>
+</section>
+
+<section class="step">
+<h2>Find the state: certificates and data</h2>
+<pre class="cmd" data-on="rhem">
+sudo ls -l /etc/flightctl/pki
+openssl x509 -in /etc/flightctl/pki/ca.crt -noout -subject -dates
+sudo openssl x509 -in /etc/flightctl/pki/flightctl-api/server.crt -noout -subject -dates -ext subjectAltName
+sudo podman volume ls
+</pre>
+<table>
+<tr><th>What</th><th>Where</th><th>Why you care</th></tr>
+<tr><td>CA certificate and <b>private key</b></td><td><code>/etc/flightctl/pki/ca.crt</code>, <code>ca.key</code></td><td>Signs every device certificate. Whoever holds <code>ca.key</code> can create devices the server will trust. Valid 10 years.</td></tr>
+<tr><td>Server certificate</td><td><code>/etc/flightctl/pki/flightctl-api/server.crt</code></td><td>Lists the names agents may use: <code>rhem.lab.internal</code> and its <code>api.</code> and <code>agent-api.</code> forms. Valid 2 years.</td></tr>
+<tr><td>Database</td><td>podman volume <code>flightctl-db</code></td><td>The fleet's whole memory.</td></tr>
+<tr><td>Configuration</td><td><code>/etc/flightctl/service-config.yaml</code></td><td>The file you edited.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Remember these three.</b> CA, database and configuration together <i>are</i> this Edge Manager. They are what a backup has to contain. Losing the CA means re-enrolling every device.</p></div>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade rhem-install
+</pre>
+<p>You can also look yourself:</p>
+<pre class="cmd" data-on="rhem">
+systemctl is-active flightctl.target
+systemctl list-units "flightctl*" --state=failed --no-pager
+curl --cacert /etc/flightctl/pki/ca.crt -I https://rhem.lab.internal/
+</pre>
+<pre class="out">
+active
+  UNIT LOAD ACTIVE SUB DESCRIPTION
+0 loaded units listed.
+HTTP/1.1 200 OK
+...output omitted...
+</pre>
+<p>No unit is in the failed state, and the web UI answers over TLS, verified against the server's own CA.</p>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish rhem-install
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

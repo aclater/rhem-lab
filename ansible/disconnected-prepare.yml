@@ -1,0 +1,214 @@
+# Appendix A, part 1: gather everything the lab downloads into four files in ~/edgelab/offline.
+# Needs the internet. Run on the workstation, in ~/edgelab, after "Prepare the workstation":
+#
+#   ansible-playbook guide/ansible/disconnected-prepare.yml
+#
+# It creates a temporary registered RHEL 9 VM named prep, builds the files there, copies them to the
+# workstation, releases the registration and deletes the VM.
+
+- name: Create the prep VM on a connected network
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: vars.yml
+  tasks:
+    - name: Check the inputs from "Prepare the workstation"
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      register: inputs
+      failed_when: not inputs.stat.exists
+      loop:
+        - "{{ guest_image }}"
+        - "{{ lab_dir }}/inputs/rhsm-activation"
+        - "{{ lab_dir }}/inputs/pull-secret.json"
+        - "{{ ssh_config }}"
+
+    - name: Create the lab SSH key if there is none
+      ansible.builtin.command: "ssh-keygen -q -t ed25519 -N '' -C edgelab -f {{ lab_dir }}/keys/id_ed25519"
+      args:
+        creates: "{{ lab_dir }}/keys/id_ed25519"
+
+    - name: Look for the lab network
+      ansible.builtin.command: "{{ virsh }} net-info {{ libvirt_network }}"
+      register: net_info
+      changed_when: false
+      failed_when: false
+
+    - name: Create the connected lab network
+      ansible.builtin.command: "{{ virsh }} {{ item }}"
+      loop:
+        - "net-define {{ connected_network_xml }}"
+        - "net-start {{ libvirt_network }}"
+      when: net_info.rc != 0
+
+    - name: Remember whether this run created the network
+      ansible.builtin.set_fact:
+        network_created: "{{ net_info.rc != 0 }}"
+
+    - name: Check that the lab network has a way out
+      ansible.builtin.command: "{{ virsh }} net-dumpxml {{ libvirt_network }}"
+      register: net_xml
+      changed_when: false
+      failed_when: "'<forward' not in net_xml.stdout"
+
+    - name: Create the prep VM
+      ansible.builtin.include_tasks: tasks/create-vm.yml
+      vars:
+        vm_host: prep
+        vm_mac: "52:54:00:a0:00:11"
+        vm_memory: 4096
+        vm_vcpus: 2
+        vm_disk_size: 60G
+
+- name: Build the offline files in the prep VM
+  hosts: prep
+  gather_facts: false
+  vars_files: vars.yml
+  vars:
+    home: /home/cloud-user
+    activation: "{{ lab_dir }}/inputs/rhsm-activation"
+  tasks:
+    - name: Wait for the prep VM
+      ansible.builtin.wait_for_connection:
+        timeout: 300
+
+    - name: Wait for the first boot to finish
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+      failed_when: false
+
+    - name: See whether the prep VM is registered
+      ansible.builtin.command: subscription-manager identity
+      become: true
+      register: identity
+      changed_when: false
+      failed_when: false
+
+    - name: Register the prep VM with the organization ID and activation key in inputs/rhsm-activation
+      ansible.builtin.command:
+        argv:
+          - subscription-manager
+          - register
+          - --org
+          - "{{ lookup('ansible.builtin.ini', 'org', type='properties', file=activation) }}"
+          - --activationkey
+          - "{{ lookup('ansible.builtin.ini', 'key', type='properties', file=activation) }}"
+      become: true
+      no_log: true
+      when: identity.rc != 0
+
+    - name: Enable the Edge Manager repository
+      ansible.builtin.command: "subscription-manager repos --enable {{ edge_manager_repo }}"
+      become: true
+
+    - name: Install the tools
+      ansible.builtin.dnf:
+        name: [flightctl-cli, skopeo, createrepo_c, podman]
+        state: present
+      become: true
+
+    - name: Create the folder for root's registry login
+      ansible.builtin.file:
+        path: /root/.config/containers
+        state: directory
+        mode: "0700"
+      become: true
+
+    - name: Give root's podman the Red Hat registry login
+      ansible.builtin.copy:
+        src: "{{ lab_dir }}/inputs/pull-secret.json"
+        dest: /root/.config/containers/auth.json
+        mode: "0600"
+      become: true
+      no_log: true
+
+    - name: Build the offline bundle (about four minutes)
+      ansible.builtin.command: >-
+        flightctl-mirror-images --variant rhem-el9 --bundle {{ home }}/rhem-bundle.tar.gz
+        --bundle-rpms --rpm-createrepo --tag-override {{ edge_manager_release }}
+      args:
+        creates: "{{ home }}/rhem-bundle.tar.gz"
+      become: true
+
+    - name: Fetch the gateway image, which the bundle leaves out
+      ansible.builtin.shell: >-
+        mkdir -p {{ home }}/gateway-image &&
+        skopeo copy docker://registry.redhat.io/{{ gateway_image }} dir:{{ home }}/gateway-image &&
+        tar -C {{ home }} -cf {{ home }}/gateway-image.tar gateway-image
+      args:
+        creates: "{{ home }}/gateway-image.tar"
+      become: true
+
+    - name: Download the mirror registry installer
+      ansible.builtin.get_url:
+        url: "{{ mirror_registry_url }}"
+        dest: "{{ home }}/mirror-registry.tar.gz"
+        mode: "0644"
+
+    - name: Pull the images the lab builds from
+      ansible.builtin.command: "podman pull {{ item }}"
+      loop: "{{ lab_images }}"
+      become: true
+
+    - name: Save them into one archive
+      ansible.builtin.command: "podman save -m -o {{ home }}/lab-images.tar {{ lab_images | join(' ') }}"
+      args:
+        creates: "{{ home }}/lab-images.tar"
+      become: true
+
+    - name: Let cloud-user read the files
+      ansible.builtin.file:
+        path: "{{ home }}/{{ item }}"
+        owner: cloud-user
+        group: cloud-user
+      loop: "{{ offline_files }}"
+      become: true
+
+    - name: Create the offline folder on the workstation
+      ansible.builtin.file:
+        path: "{{ lab_dir }}/offline"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+
+    - name: Copy the four files to the workstation (5.3 GB)
+      ansible.builtin.command: "scp -F {{ ssh_config }} prep:{{ item }} {{ lab_dir }}/offline/"
+      loop: "{{ offline_files }}"
+      delegate_to: localhost
+
+    - name: Release the prep VM's registration
+      ansible.builtin.command: subscription-manager unregister
+      become: true
+
+- name: Remove the prep VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files: vars.yml
+  tasks:
+    - name: Delete the prep VM
+      ansible.builtin.command: "{{ virsh }} {{ item }}"
+      loop:
+        - "destroy {{ vm_prefix }}prep"
+        - "undefine {{ vm_prefix }}prep --nvram"
+
+    - name: Delete its disk
+      ansible.builtin.file:
+        path: "{{ lab_dir }}/images/prep.qcow2"
+        state: absent
+
+    - name: Remove the connected network, if this run created it
+      ansible.builtin.command: "{{ virsh }} {{ item }}"
+      loop:
+        - "net-destroy {{ libvirt_network }}"
+        - "net-undefine {{ libvirt_network }}"
+      when: network_created
+
+    - name: Show the result
+      ansible.builtin.command: "ls -lh {{ lab_dir }}/offline"
+      register: listing
+      changed_when: false
+
+    - name: The four files
+      ansible.builtin.debug:
+        msg: "{{ listing.stdout_lines }}"

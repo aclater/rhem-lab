@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Remove the lab</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 11 <span class="exname">lab-teardown</span></p>
+<h1>Remove the lab</h1>
+<p class="lede">Remove everything the lab created, in the reverse order it was built. Afterwards the workstation is as it was before module 0, apart from the packages installed there.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>The server's Red Hat registration is released.</li>
+  <li>The four VMs, the lab network and the <code>~/edgelab</code> folder are gone.</li>
+</ul>
+</div>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Release the Red Hat registration</h2>
+<p>The server VM is registered with your Red Hat account. Unregister it before deleting it, or it stays in your inventory as a system that no longer exists.</p>
+<pre class="cmd" data-on="rhem">
+sudo subscription-manager unregister
+</pre>
+<div class="admon note"><p class="admon-title">Note</p><p>The edge devices are not registered; only the build ran with the server's entitlement.</p></div>
+</section>
+
+<section class="step">
+<h2>Delete the VMs</h2>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system destroy edge-1
+virsh -c qemu:///system destroy edge-2
+virsh -c qemu:///system destroy edge-3
+virsh -c qemu:///system destroy rhem
+virsh -c qemu:///system undefine edge-1 --nvram
+virsh -c qemu:///system undefine edge-2 --nvram
+virsh -c qemu:///system undefine edge-3 --nvram
+virsh -c qemu:///system undefine rhem --nvram
+virsh -c qemu:///system list --all
+</pre>
+<ul>
+  <li><code>destroy</code> is libvirt's word for "power off now". It does not delete anything.</li>
+  <li><code>undefine --nvram</code> removes the VM's definition and its UEFI settings file. The disk files in <code>~/edgelab/images</code> are left for the last step.</li>
+</ul>
+<p>Both commands were run while writing this guide.</p>
+</section>
+
+<section class="step">
+<h2>Delete the network</h2>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system net-destroy rhem-lab
+virsh -c qemu:///system net-undefine rhem-lab
+virsh -c qemu:///system net-list --all
+</pre>
+<p>This also removes the bridge <code>virbr-rhem</code>, and with it the name lookup you set up for the web UI in module 4.</p>
+</section>
+
+<section class="step">
+<h2>Grade the teardown</h2>
+<p>Do this before deleting the working folder, because the <code>lab</code> command lives in it:</p>
+<pre class="cmd" data-on="host">
+./lab grade lab-teardown
+</pre>
+<p>The four VMs and the network must be reported as removed.</p>
+</section>
+
+<section class="step">
+<h2>Delete the working folder</h2>
+<p>This deletes the VM disks, the lab SSH key, the clone of the guide, and your copies of (or links to) the three input files. If you saved the inputs here as files rather than links and want to keep them, move them out first.</p>
+<pre class="cmd" data-on="host">
+make -C ~/edgelab/guide stop
+cd ~
+rm -rf ~/edgelab
+</pre>
+<p>The first line stops the guide's web server, if you started it.</p>
+</section>
+
+<h2>Verification</h2>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system list --all
+ls ~/edgelab
+</pre>
+<p>No lab VM is listed, and the folder no longer exists.</p>
+
+<h2>Where to go next</h2>
+<p>Topics this lab did not cover, and that have not been tested for this guide:</p>
+<table>
+<tr><th>Topic</th><th>Why it follows from what you built</th></tr>
+<tr><td>Backup and restore</td><td>You saw that the CA, the database and the configuration <i>are</i> the server. Edge Manager has <code>flightctl-backup</code> and <code>flightctl-restore</code> for exactly that set.</td></tr>
+<tr><td>Delta updates</td><td>New in 1.4: devices download only the difference between their current image and the new one. Your devices already report <code>deltaEligible: true</code>.</td></tr>
+<tr><td>Automatic rollback</td><td>Health checks after an OS update (greenboot), so a device returns to the previous image by itself when the new one is unhealthy.</td></tr>
+<tr><td>Private repositories and signed images</td><td>This lab made the registry public on the lab network. Pull secrets on devices and image signature verification close that gap.</td></tr>
+<tr><td>Fleets from git</td><td>Edge Manager can read fleet definitions from a git repository, so a merged change becomes a rollout.</td></tr>
+<tr><td>MicroShift</td><td>Red Hat Device Edge also includes MicroShift. A device image that contains it can run Helm applications from the same fleet.</td></tr>
+</table>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

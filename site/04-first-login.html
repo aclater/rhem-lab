@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in for the first time</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 4 <span class="exname">rhem-login</span></p>
+<h1>Log in for the first time</h1>
+<p class="lede">A fresh Edge Manager has no users. Create an administrator, make the server VM trust the lab CA, and log in with the CLI and the web UI.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>A user <code>admin</code> with the administrator role.</li>
+  <li><code>flightctl</code> logged in on the <code>rhem</code> VM.</li>
+  <li>The web UI open in your browser at <code>https://rhem.lab.internal</code>.</li>
+</ul>
+</div>
+
+<h2>Before you begin</h2>
+<p>On the workstation, in <code>~/edgelab</code>, confirm that the earlier exercises are complete:</p>
+<pre class="cmd" data-on="host">
+./lab start rhem-login
+</pre>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Create an administrator</h2>
+<p>The bundled login provider checks usernames and passwords against ordinary Linux accounts, but <b>inside its own container</b>, not on the VM. A user's role comes from the groups they are in.</p>
+<p>Create the administrators' group:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman exec flightctl-pam-issuer groupadd -f flightctl-admin
+</pre>
+<p>Create the user <code>admin</code> in that group:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman exec flightctl-pam-issuer useradd -m --groups flightctl-admin admin
+</pre>
+<p>The user has no password yet and cannot log in. Set the lab password, <code>edgelab123</code>:</p>
+<pre class="cmd" data-on="rhem">
+echo "admin:edgelab123" | sudo podman exec -i flightctl-pam-issuer chpasswd
+</pre>
+<p><code>chpasswd</code> reads a line of the form <i>user</i><code>:</code><i>password</i> and sets that user's password. It prints nothing when it succeeds.</p>
+<div class="admon important"><p class="admon-title">Important</p><p><b>Lab password.</b> This lab uses one password, <code>edgelab123</code>, for the two accounts it creates: this one and the registry's in the next module. A fixed, visible password is fine for a lab that only exists on your workstation. Never do this on a system that others can reach.</p></div>
+<p>Confirm that the user exists:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman exec flightctl-pam-issuer id admin
+</pre>
+<pre class="out">
+uid=1000(admin) gid=1001(admin) groups=1001(admin),1000(flightctl-admin)
+</pre>
+<table>
+<tr><th>Group</th><th>Role (from the product documentation; only <code>flightctl-admin</code> is used in this lab)</th></tr>
+<tr><td><code>flightctl-admin</code></td><td>Everything, including approving devices and managing other resources.</td></tr>
+<tr><td><code>flightctl-operator</code></td><td>Day-to-day device and fleet management.</td></tr>
+<tr><td><code>flightctl-viewer</code></td><td>Read-only.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Where the accounts live.</b> In the podman volume <code>flightctl-pam-issuer-etc</code>, so they survive restarts and upgrades. For a real deployment you would point Edge Manager at your organization's identity provider instead (<code>auth</code> in <code>service-config.yaml</code>); the bundled provider keeps the lab self-contained.</p></div>
+</section>
+
+<section class="step">
+<h2>Trust the lab CA on the server VM</h2>
+<p>The server's certificate is signed by the CA it created for itself, which nothing trusts yet. Add that CA to the VM's system trust store:</p>
+<pre class="cmd" data-on="rhem">
+sudo install -m 0644 /etc/flightctl/pki/ca.crt /etc/pki/ca-trust/source/anchors/rhem-lab-ca.crt
+sudo update-ca-trust
+curl -I https://rhem.lab.internal/
+</pre>
+<pre class="out">
+HTTP/1.1 200 OK
+...output omitted...
+</pre>
+<p><code>curl</code> now succeeds without <code>--cacert</code>. So will <code>flightctl</code> and <code>podman</code>.</p>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why not just skip verification?</b> <code>flightctl login</code> has an <code>--insecure-skip-tls-verify</code> flag, and it would work. But trusting one CA is the habit you need at the edge: devices will be given exactly this CA so that they talk to your server and nothing else.</p></div>
+</section>
+
+<section class="step">
+<h2>Log in with the CLI</h2>
+<pre class="cmd" data-on="rhem">
+flightctl login https://rhem.lab.internal --username admin --password edgelab123
+flightctl version
+</pre>
+<pre class="out">
+Auto-selected organization: 00000000-0000-0000-0000-000000000000 Default
+Login successful.
+Client Version: v1.4.0
+Server Version: v1.4.0
+</pre>
+<ul>
+  <li>The login is stored in <code>~/.config/flightctl/client.yaml</code> as a token. When it expires, log in again.</li>
+  <li>Everything you create belongs to an <b>organization</b>. A standalone install has one, <code>Default</code>.</li>
+  <li>If the two versions differ, install the matching <code>flightctl-cli</code>.</li>
+</ul>
+</section>
+
+<section class="step">
+<h2>Look around with the CLI</h2>
+<pre class="cmd" data-on="rhem">
+flightctl get organizations
+flightctl get devices
+flightctl get enrollmentrequests
+flightctl get fleets
+</pre>
+<p>All empty apart from the organization. These three kinds are the core of everything that follows:</p>
+<table>
+<tr><th>Kind</th><th>What it is</th><th>Module</th></tr>
+<tr><td><code>EnrollmentRequest</code></td><td>A new device asking to be let in. Waits for your approval.</td><td>7</td></tr>
+<tr><td><code>Device</code></td><td>An approved device: its desired spec and its reported status.</td><td>7</td></tr>
+<tr><td><code>Fleet</code></td><td>A spec template applied to all devices with matching labels.</td><td>8</td></tr>
+</table>
+<p><code>flightctl --help</code> lists the commands. They follow the <code>kubectl</code> pattern: <code>get</code>, <code>apply -f</code>, <code>edit</code>, <code>delete</code>, with resources written as YAML.</p>
+</section>
+
+<section class="step">
+<h2>Open the web UI</h2>
+<p>Your browser runs on the workstation, which does not know the name <code>rhem.lab.internal</code> yet. Tell the workstation's resolver to ask the lab network's DNS for that one domain:</p>
+<pre class="cmd" data-on="host">
+sudo resolvectl dns virbr-rhem 192.168.160.1
+sudo resolvectl domain virbr-rhem '~lab.internal'
+resolvectl query rhem.lab.internal
+</pre>
+<pre class="out">
+rhem.lab.internal: 192.168.160.10                    -- link: virbr-rhem
+</pre>
+<ul>
+  <li>The <code>~</code> means "use this DNS server only for names under <code>lab.internal</code>". Everything else keeps using your normal DNS.</li>
+  <li>Nothing is written to disk. The setting disappears when the lab network is stopped or the workstation reboots; run the two commands again after that.</li>
+</ul>
+<p>Then open <a href="https://rhem.lab.internal" target="_blank" rel="noopener">https://rhem.lab.internal</a>. The browser warns about the certificate, because it does not know the lab CA. Accept the warning for this site, and log in as <code>admin</code> with the password <code>edgelab123</code>.</p>
+<div class="admon important"><p class="admon-title">Important</p><p>The name is required. The web UI does not work by IP address, because its login page redirects to <code>https://rhem.lab.internal/…</code>.</p></div>
+<p>In the UI, find <b>Devices</b>, <b>Fleets</b> and <b>Repositories</b> in the left menu. It shows the same objects as the CLI; the guide uses the CLI because commands can be repeated and kept in git, and suggests when to look at the UI.</p>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade rhem-login
+</pre>
+<p>You can also check by hand:</p>
+<pre class="cmd" data-on="rhem">
+flightctl version &amp;&amp; flightctl get devices
+</pre>
+<p>Both versions print as <code>v1.4.0</code> and the device list is empty, without any certificate or login error.</p>
+<div class="box">
+<h4>Where you are</h4>
+<p>The management side is complete: a server with its own CA, a database, and an administrator. Next come the things it manages. Devices need two things before they can exist: a registry to pull images from (module 5) and an operating system image that knows how to find this server (module 6).</p>
+</div>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish rhem-login
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

@@ -1,0 +1,232 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build the device image</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 6 <span class="exname">image-build</span></p>
+<h1>Build the device image</h1>
+<p class="lede">Build the operating system your edge devices will run: RHEL in image mode, with the Edge Manager agent and everything the agent needs to find and trust your server. Then turn it into a disk a VM can boot.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>An OS image <code>rhem.lab.internal:8443/admin/edge-os:v1</code> in your registry.</li>
+  <li>A bootable disk image made from it, copied to the workstation as <code>~/edgelab/images/edge-os-v1.qcow2</code>.</li>
+</ul>
+</div>
+<div class="admon note"><p class="admon-title">Note</p><p><b>This is Red Hat Device Edge.</b> The device OS is RHEL built as a container image (<i>image mode</i>, the tool is <code>bootc</code>). You describe the whole operating system in a Containerfile, build it like an application image, and devices boot it directly. An update is a new image; the device downloads it, reboots into it, and keeps the previous one to fall back to. Nothing is ever patched in place, so every device running <code>edge-os:v1</code> is identical.</p></div>
+
+<h2>Before you begin</h2>
+<p>On the workstation, in <code>~/edgelab</code>, confirm that the earlier exercises are complete:</p>
+<pre class="cmd" data-on="host">
+./lab start image-build
+</pre>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Request an enrollment certificate</h2>
+<p>A new device has to prove it is allowed to ask for enrollment. That proof is a certificate, which you request from the server and put into the image.</p>
+<pre class="cmd" data-on="rhem">
+mkdir ~/device
+cd ~/device
+flightctl certificate request --signer=enrollment --expiration=365d --output=embedded > config.yaml
+chmod 600 config.yaml
+grep -v data: config.yaml
+</pre>
+<pre class="out">
+enrollment-service:
+  authentication:
+  enrollment-ui-endpoint: https://rhem.lab.internal
+  service:
+    server: https://rhem.lab.internal:7443/
+...output omitted...
+</pre>
+<p>The file also holds three long lines ending in <code>-data:</code> followed by encoded certificates and a key. <code>grep -v data:</code> leaves those lines out so that you can read the rest.</p>
+<p>This file is the agent's whole configuration. Three things in it shape everything a device does:</p>
+<table>
+<tr><th>Field</th><th>Meaning</th><th>Consequence</th></tr>
+<tr><td><code>server</code></td><td>Where the agent connects: your base domain, port 7443.</td><td>The device finds the server by <b>name</b>. Whatever answers to that name with the right certificate is "the server".</td></tr>
+<tr><td><code>certificate-authority-data</code></td><td>Edge Manager's CA certificate.</td><td>The device talks only to a server whose certificate this CA signed.</td></tr>
+<tr><td><code>client-certificate-data</code>, <code>client-key-data</code></td><td>The enrollment certificate and its key, valid 365 days.</td><td>Lets a device <i>ask</i> to enroll. It grants nothing else: each request still needs your approval.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Early binding.</b> Putting this file in the image is called early binding: every device made from the image already knows its server. The alternative, late binding, leaves it out and injects it when a device is provisioned, so one image can serve several Edge Manager installations. All devices share this enrollment certificate; each one creates its own private key on first boot and gets its own identity certificate when you approve it.</p></div>
+<div class="admon warning"><p class="admon-title">Warning</p><p>The file contains a private key. Anyone holding it can submit enrollment requests to your server until it expires. That is why the image goes in your own registry, and why approval is a deliberate step.</p></div>
+</section>
+
+<section class="step">
+<h2>Collect the registry's CA</h2>
+<p>Devices will pull their OS updates and applications from your registry, so they have to trust its certificate authority.</p>
+<pre class="cmd" data-on="rhem">
+sudo cat /opt/quay/quay-rootCA/rootCA.pem > registry-ca.pem
+openssl x509 -in registry-ca.pem -noout -subject
+</pre>
+</section>
+
+<section class="step">
+<h2>Write the Containerfile</h2>
+<pre class="cmd" data-on="rhem">
+cat > Containerfile &lt;&lt;'EOF'
+FROM registry.redhat.io/rhel9/rhel-bootc:9.8
+
+# The Edge Manager agent, from the same repository stream as the server.
+RUN dnf config-manager --set-enabled edge-manager-1.4-for-rhel-9-x86_64-rpms &amp;&amp; \
+    dnf -y install flightctl-agent &amp;&amp; \
+    dnf -y clean all &amp;&amp; \
+    systemctl enable flightctl-agent.service
+
+# Where the server is, which CA to trust for it, and the certificate that lets a new device ask to enroll.
+ADD config.yaml /etc/flightctl/config.yaml
+
+# Trust the lab registry, so the device can pull OS updates and applications from it.
+ADD registry-ca.pem /etc/pki/ca-trust/source/anchors/lab-registry-ca.pem
+RUN update-ca-trust
+
+# Lab convenience: members of wheel may use sudo without a password.
+RUN echo "%wheel ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/wheel-nopasswd
+
+RUN bootc container lint
+EOF
+</pre>
+<table>
+<tr><th>Line</th><th>What it does</th><th>Effect on the device</th></tr>
+<tr><td><code>FROM …/rhel9/rhel-bootc:9.8</code></td><td>Red Hat's bootable RHEL 9.8 base image: a kernel, systemd, podman and the image-mode tooling.</td><td>The device runs the same RHEL release as the server.</td></tr>
+<tr><td><code>dnf config-manager …</code>, <code>dnf install flightctl-agent</code></td><td>Enables the Edge Manager repository inside the build and installs the agent, version 1.4.0 to match the server.</td><td>Also creates a <code>flightctl</code> system user, which applications run as, and turns off image mode's own automatic updates so that Edge Manager alone decides when the OS changes.</td></tr>
+<tr><td><code>systemctl enable flightctl-agent.service</code></td><td>Starts the agent at boot.</td><td>A device enrolls by itself the first time it is powered on.</td></tr>
+<tr><td><code>ADD config.yaml</code></td><td>The file from step 1.</td><td>Early binding.</td></tr>
+<tr><td><code>ADD registry-ca.pem</code>, <code>update-ca-trust</code></td><td>Adds your registry's CA to the system trust store.</td><td>Without it, every image pull on the device fails with a certificate error.</td></tr>
+<tr><td><code>bootc container lint</code></td><td>Checks the result for mistakes that would stop it booting.</td><td>Problems fail the build here, not on a device in the field.</td></tr>
+</table>
+<div class="admon important"><p class="admon-title">Important</p><p><b>Differs from the 1.3 documentation.</b> Red Hat's 1.3 procedure adds <code>useradd … flightctl</code> to this step. With the 1.4 agent package that line fails the build ("user 'flightctl' already exists"), because the package now creates the user itself.</p></div>
+</section>
+
+<section class="step">
+<h2>Build and push the OS image</h2>
+<pre class="cmd" data-on="rhem">
+sudo podman build -t rhem.lab.internal:8443/admin/edge-os:v1 .
+sudo podman push rhem.lab.internal:8443/admin/edge-os:v1
+sudo podman images rhem.lab.internal:8443/admin/edge-os
+</pre>
+<p>About two minutes. The image is around 2 GB.</p>
+<ul>
+  <li><b>It builds here because this VM is registered.</b> Podman on a registered RHEL host passes the host's entitlement into the build, which is what lets <code>dnf</code> inside the image reach the RHEL and Edge Manager repositories. On an unregistered machine the first <code>RUN</code> fails.</li>
+  <li><code>sudo</code> matters: the next step reads the image from root's image store.</li>
+  <li>The name is <code>registry/account/repository:tag</code>. <code>admin</code> is the registry account from module 5. The tag <code>v1</code> is how you will tell OS releases apart.</li>
+</ul>
+<p>Look inside the image without booting it:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman run --rm rhem.lab.internal:8443/admin/edge-os:v1 \
+  sh -c "rpm -q flightctl-agent; id flightctl; systemctl is-enabled flightctl-agent; ls -l /etc/flightctl/"
+</pre>
+<pre class="out">
+flightctl-agent-1.4.0-1.el9.x86_64
+uid=1000(flightctl) gid=1000(flightctl) groups=1000(flightctl)
+enabled
+total 8
+-rw-------. 1 root root 4135 … config.yaml
+</pre>
+</section>
+
+<section class="step">
+<h2>Turn the image into a disk</h2>
+<p>A registry image cannot be booted by a new machine with an empty disk. <b>bootc-image-builder</b> converts it into a disk image; here a <code>qcow2</code> for KVM. A small settings file adds a login user, <code>lab</code>, with your lab public key.</p>
+<p>First copy the public key from the workstation to the server VM:</p>
+<pre class="cmd" data-on="host">
+scp -F ~/edgelab/ssh_config keys/id_ed25519.pub rhem:device/lab-key.pub
+</pre>
+<p>Then, in the server VM, write the settings file. The word <code>LAB_PUBLIC_KEY</code> is a marker; enter it as shown:</p>
+<pre class="cmd" data-on="rhem">
+cd ~/device
+cat > config.toml &lt;&lt;'EOF'
+[[customizations.user]]
+name = "lab"
+groups = ["wheel"]
+key = "LAB_PUBLIC_KEY"
+EOF
+</pre>
+<p>Now replace the marker with the key. Enter this command exactly as shown; do not substitute anything yourself. <code>sed</code> swaps the marker word for the content of the key file you just copied, which the part in <code>$( )</code> reads:</p>
+<pre class="cmd" data-on="rhem">
+sed -i "s|LAB_PUBLIC_KEY|$(cat lab-key.pub)|" config.toml
+cat config.toml
+mkdir output
+</pre>
+<pre class="out">
+[[customizations.user]]
+name = "lab"
+groups = ["wheel"]
+key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA… edgelab"
+</pre>
+<p>The <code>key</code> line must now hold the key itself, starting with <code>ssh-ed25519</code>. If it still says <code>LAB_PUBLIC_KEY</code>, the devices will boot but you will not be able to log in to them.</p>
+<p>Build the disk:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman run --rm --privileged --pull=newer \
+  --security-opt label=type:unconfined_t \
+  -v ./config.toml:/config.toml:ro \
+  -v ./output:/output \
+  -v /var/lib/containers/storage:/var/lib/containers/storage \
+  registry.redhat.io/rhel9/bootc-image-builder:latest \
+  --type qcow2 \
+  rhem.lab.internal:8443/admin/edge-os:v1
+sudo ls -lh output/qcow2/
+</pre>
+<pre class="out">
+-rw-r--r--. 1 root root 1.4G … disk.qcow2
+</pre>
+<p>About three minutes. What the options do:</p>
+<table>
+<tr><th>Option</th><th>Why</th></tr>
+<tr><td><code>--privileged</code>, <code>--security-opt …</code></td><td>The builder partitions a disk file and installs a boot loader into it, which needs device access a normal container does not have.</td></tr>
+<tr><td><code>-v /var/lib/containers/storage:…</code></td><td>Lets the builder read the OS image from root's local image store instead of pulling it again.</td></tr>
+<tr><td><code>--type qcow2</code></td><td>The disk format. Others include <code>iso</code> (an installer for bare metal), <code>raw</code> and <code>vmdk</code>.</td></tr>
+<tr><td><code>config.toml</code></td><td>Disk-time customization. The user <code>lab</code> exists only on machines installed from this disk; it is not part of the OS image.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Image versus disk.</b> The disk image is only used once per device, to get it started. From then on the device follows the <i>OS image in the registry</i>: the disk records that it came from <code>rhem.lab.internal:8443/admin/edge-os:v1</code>, and updates arrive as new tags of that image. For real hardware you would build an <code>iso</code> or <code>raw</code> image from the same OS image; nothing else changes.</p></div>
+</section>
+
+<section class="step">
+<h2>Copy the disk to the workstation</h2>
+<pre class="cmd" data-on="host">
+scp -F ~/edgelab/ssh_config rhem:device/output/qcow2/disk.qcow2 images/edge-os-v1.qcow2
+qemu-img info images/edge-os-v1.qcow2
+</pre>
+<pre class="out">
+image: images/edge-os-v1.qcow2
+file format: qcow2
+virtual size: 10 GiB (10737418240 bytes)
+disk size: 1.36 GiB
+...output omitted...
+</pre>
+<p>This is the master copy. Each edge VM gets its own copy of it in the next module.</p>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade image-build
+</pre>
+<p>You can also check by hand:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman search --list-tags rhem.lab.internal:8443/admin/edge-os
+</pre>
+<pre class="out">
+NAME                                   TAG
+rhem.lab.internal:8443/admin/edge-os   v1
+</pre>
+<p>The image is in the registry, and the disk made from it is on the workstation.</p>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish image-build
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

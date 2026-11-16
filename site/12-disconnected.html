@@ -1,0 +1,382 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run the lab disconnected</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Appendix A <span class="exname">disconnected</span></p>
+<h1>Run the lab disconnected</h1>
+<p class="lede">Do the whole lab on a network with no route to the internet. You gather everything on a connected machine first, carry it across, and then install and run from local content only.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>A set of four files that holds everything the lab would otherwise download.</li>
+  <li>The Edge Manager server, the registry, the device image and three devices, built and running with no internet access.</li>
+</ul>
+</div>
+
+<h2>What changes when you are disconnected</h2>
+<table>
+<tr><th>The connected lab gets this from the internet</th><th>Disconnected, it comes from</th></tr>
+<tr><td>Edge Manager packages, and <code>podman</code> and its dependencies, from Red Hat's CDN after registering the server</td><td>The RPMs in Red Hat's offline bundle. The server is never registered.</td></tr>
+<tr><td>Edge Manager's container images from <code>registry.redhat.io</code></td><td>The same images in the offline bundle, served by a small local registry on the server, with their signatures.</td></tr>
+<tr><td>The mirror registry installer</td><td>The same archive, downloaded in advance.</td></tr>
+<tr><td>The RHEL image mode base image, the disk image builder and the application's base image</td><td>One archive of the three images, saved in advance and loaded on the server.</td></tr>
+<tr><td>The agent package inside the device image build</td><td>The agent RPM in the offline bundle, offered to the build as a local repository.</td></tr>
+</table>
+<p>Everything after the server is installed (logging in, enrolling devices, fleets, workloads, updates) is identical. The two parts below replace modules 1, 3 and the download steps of modules 5 and 6.</p>
+
+<h2>Before you begin</h2>
+<p>Complete <a href="00-prerequisites.html">Prepare the workstation</a> while the workstation is still connected. Part 1 also needs the internet. From part 2 on, nothing does.</p>
+
+<h2 id="playbooks">Resource: playbooks for the setup</h2>
+<p>Both parts below are written to be done by hand. When you need only the result, for example to prepare the files once for a class or to rebuild a server quickly, two Ansible playbooks in the guide's <code>ansible</code> folder do the same steps. They need the <code>ansible-core</code> package, which is in the RHEL AppStream repository, and nothing else. They were run with ansible-core 2.14 on RHEL 9.8, 2.16 on RHEL 10.2, 2.20 on Fedora 44 and 2.22 on Fedora 45; the first playbook ran in full on Fedora only.</p>
+<pre class="cmd" data-on="host">
+sudo dnf install ansible-core
+</pre>
+<table>
+<tr><th>Playbook</th><th>Does</th><th>Needs</th><th>Time seen</th></tr>
+<tr><td><code>disconnected-prepare.yml</code></td><td>All of part 1: creates the prep VM, registers it, builds the four files in <code>~/edgelab/offline</code>, releases the registration and deletes the VM.</td><td>The internet, and the three files in <code>inputs</code>.</td><td>8 to 12 minutes</td></tr>
+<tr><td><code>disconnected-server.yml</code></td><td>Part 2 up to "Configure and start Edge Manager": the disconnected network, the server VM, the packages, the local registry, the image import and the registry settings. It also unpacks the registry installer and loads the lab's base images.</td><td>The four files in <code>~/edgelab/offline</code>. No internet.</td><td>3 to 6 minutes</td></tr>
+</table>
+<pre class="cmd" data-on="host">
+ansible-playbook guide/ansible/disconnected-prepare.yml
+ansible-playbook guide/ansible/disconnected-server.yml
+</pre>
+<pre class="out">
+...output omitted...
+PLAY RECAP *********************************************************************
+localhost                  : ok=12   changed=3    unreachable=0    failed=0    skipped=3    rescued=0    ignored=0
+rhem                       : ok=28   changed=17   unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+</pre>
+<p>Run them in <code>~/edgelab</code>. Each prints a warning that no inventory was given, which is expected: the playbooks find the VMs through <code>ssh_config</code>. After the second one, continue with <a href="03-install-rhem.html">Install Red Hat Edge Manager</a> from step 5, and skip step 1 of <a href="05-registry.html">Install a registry</a> and the <code>podman load</code> step of this appendix. The differences in building the device image still apply.</p>
+<div class="admon note"><p class="admon-title">Note</p><p>Either playbook can be run again after a failure; it skips what is already done. The first one reads your organization ID and activation key from <code>inputs/rhsm-activation</code> and does not print them. It leaves an existing lab network alone. The second one stops if the lab network still has a route out, and tells you how to remove it.</p></div>
+
+<h2>Instructions: part 1, prepare while connected</h2>
+
+<section class="step">
+<h2>Create a prep VM on a connected network</h2>
+<p>Red Hat's bundling tool has to run on registered RHEL of the same major version as the server, so the preparation happens in a temporary RHEL 9 VM. Create the connected lab network and the VM:</p>
+<pre class="cmd" data-on="host">
+ssh-keygen -q -t ed25519 -N '' -C edgelab -f keys/id_ed25519
+virsh -c qemu:///system net-define network.xml
+virsh -c qemu:///system net-start rhem-lab
+cp --sparse=always inputs/rhel-9.8-x86_64-kvm.qcow2 images/prep.qcow2
+qemu-img resize images/prep.qcow2 60G
+</pre>
+<pre class="cmd" data-on="host">
+virt-install --connect qemu:///system --name prep --memory 4096 --vcpus 2 \
+  --import --disk images/prep.qcow2 --osinfo rhel9-unknown \
+  --network network=rhem-lab,mac=52:54:00:a0:00:11 \
+  --cloud-init clouduser-ssh-key=keys/id_ed25519.pub \
+  --boot uefi --graphics none --noautoconsole
+</pre>
+<p>Skip the <code>ssh-keygen</code> line if you already made the lab key. After about 30 seconds, log in:</p>
+<pre class="cmd" data-on="host">
+ssh -F ~/edgelab/ssh_config prep
+</pre>
+</section>
+
+<section class="step">
+<h2>Register the prep VM and install the tools</h2>
+<p>In the prep VM, register with your organization ID and activation key, as in <a href="03-install-rhem.html">Install Red Hat Edge Manager</a>, then enable the Edge Manager repository and install the tools:</p>
+<pre class="file">
+sudo subscription-manager register --org <i>&lt;organization_id&gt;</i> --activationkey <i>&lt;activation_key&gt;</i>
+</pre>
+<pre class="cmd" data-on="prep">
+sudo subscription-manager repos --enable edge-manager-1.4-for-rhel-9-x86_64-rpms
+sudo dnf install -y flightctl-cli skopeo createrepo_c podman
+</pre>
+<p>Give root's podman your Red Hat registry login. On the workstation:</p>
+<pre class="cmd" data-on="host">
+scp -F ~/edgelab/ssh_config inputs/pull-secret.json prep:pull-secret.json
+</pre>
+<pre class="cmd" data-on="prep">
+sudo install -D -m 0600 pull-secret.json /root/.config/containers/auth.json
+rm pull-secret.json
+</pre>
+</section>
+
+<section class="step">
+<h2>Build the offline bundle</h2>
+<pre class="cmd" data-on="prep">
+sudo flightctl-mirror-images --variant rhem-el9 --bundle /home/cloud-user/rhem-bundle.tar.gz --bundle-rpms --rpm-createrepo --tag-override 1.4.0
+sudo chown cloud-user: rhem-bundle.tar.gz
+ls -lh rhem-bundle.tar.gz
+</pre>
+<pre class="out">
+[INFO]    Images: 22
+[INFO]  Bundle created: /home/cloud-user/rhem-bundle.tar.gz
+-rw-r--r--. 1 cloud-user cloud-user 1.8G … rhem-bundle.tar.gz
+</pre>
+<p>About four minutes. The options:</p>
+<table>
+<tr><th>Option</th><th>Meaning</th></tr>
+<tr><td><code>--variant rhem-el9</code></td><td>Red Hat's images, for a RHEL 9 server.</td></tr>
+<tr><td><code>--bundle</code></td><td>Write one archive holding the container images, with two scripts to unpack them on the other side.</td></tr>
+<tr><td><code>--bundle-rpms --rpm-createrepo</code></td><td>Also include the Edge Manager server, CLI and agent RPMs with everything they depend on (224 packages, <code>podman</code> included), as a ready-made repository.</td></tr>
+<tr><td><code>--tag-override 1.4.0</code></td><td>Pin the images and the RPMs to one release, so they match each other.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p>Red Hat's documentation calls this tool <code>mirror-images</code>. The command installed by the <code>flightctl-cli</code> package is <code>flightctl-mirror-images</code>.</p></div>
+</section>
+
+<section class="step">
+<h2>Fetch the gateway image</h2>
+<p>The 1.4.0 bundle leaves out one image that the server needs: the nginx image behind the gateway service. Fetch it separately, with its signatures:</p>
+<pre class="cmd" data-on="prep">
+mkdir gateway-image
+sudo skopeo copy docker://registry.redhat.io/rhel9/nginx-124:1-1792441608 dir:/home/cloud-user/gateway-image
+sudo chown -R cloud-user: gateway-image
+tar -cf gateway-image.tar gateway-image
+</pre>
+<p>The exact tag belongs to this Edge Manager release. On an installed server it is the <code>Image=</code> line of <code>/usr/share/containers/systemd/flightctl-gateway.container</code>.</p>
+</section>
+
+<section class="step">
+<h2>Fetch what the rest of the lab downloads</h2>
+<p>The mirror registry installer:</p>
+<pre class="cmd" data-on="prep">
+curl -LO https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/mirror-registry/1.3.11/mirror-registry.tar.gz
+</pre>
+<p>The three images the lab builds from, saved into one archive:</p>
+<pre class="cmd" data-on="prep">
+sudo podman pull registry.redhat.io/rhel9/rhel-bootc:9.8
+sudo podman pull registry.redhat.io/rhel9/bootc-image-builder:latest
+sudo podman pull registry.access.redhat.com/ubi9/nginx-124:latest
+sudo podman save -m -o lab-images.tar registry.redhat.io/rhel9/rhel-bootc:9.8 registry.redhat.io/rhel9/bootc-image-builder:latest registry.access.redhat.com/ubi9/nginx-124:latest
+sudo chown cloud-user: lab-images.tar
+ls -lh *.tar *.tar.gz
+</pre>
+<pre class="out">
+-rw-r--r--. 1 cloud-user cloud-user 111M … gateway-image.tar
+-rw-r--r--. 1 cloud-user cloud-user 2.7G … lab-images.tar
+-rw-r--r--. 1 cloud-user cloud-user 696M … mirror-registry.tar.gz
+-rw-r--r--. 1 cloud-user cloud-user 1.8G … rhem-bundle.tar.gz
+</pre>
+</section>
+
+<section class="step">
+<h2>Carry the files to the workstation and remove the prep VM</h2>
+<pre class="cmd" data-on="host">
+mkdir offline
+scp -F ~/edgelab/ssh_config prep:rhem-bundle.tar.gz prep:gateway-image.tar prep:mirror-registry.tar.gz prep:lab-images.tar offline/
+ls -lh offline
+</pre>
+<p>These four files, 5.3 GB together, are what you would put on portable media. Release the prep VM's registration, then delete the VM and the connected network:</p>
+<pre class="cmd" data-on="prep">
+sudo subscription-manager unregister
+</pre>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system destroy prep
+virsh -c qemu:///system undefine prep --nvram
+virsh -c qemu:///system net-destroy rhem-lab
+virsh -c qemu:///system net-undefine rhem-lab
+rm images/prep.qcow2
+</pre>
+</section>
+
+<h2>Instructions: part 2, the lab with no internet</h2>
+<p>The exercises keep their names, and the <code>lab</code> command checks them as in the connected lab. Run <code>./lab grade network-create</code> after the first step below, <code>./lab grade server-create</code> after the second, and <code>./lab grade rhem-install</code> once Edge Manager is started.</p>
+
+<section class="step">
+<h2>Create the disconnected network</h2>
+<p>If you did not do part 1 on this workstation, for example because you received the offline files from someone else, make the lab's SSH key first. If the command asks whether to overwrite an existing key, answer <code>n</code>: you already have it.</p>
+<pre class="cmd" data-on="host">
+ssh-keygen -q -t ed25519 -N '' -C edgelab -f keys/id_ed25519
+</pre>
+<p>Then create the network. This step replaces <a href="01-network.html">Create the lab network</a>:</p>
+<pre class="cmd" data-on="host">
+cp guide/files/network-disconnected.xml .
+cat network-disconnected.xml
+virsh -c qemu:///system net-define network-disconnected.xml
+virsh -c qemu:///system net-start rhem-lab
+</pre>
+<p>It is the lab network without the line <code>&lt;forward mode='nat'/&gt;</code>: same name, same addresses, same DNS, and no way out. One addition matters: it still hands out a default route.</p>
+<div class="admon important"><p class="admon-title">Important</p><p>Edge Manager's first start looks up the server's own address by asking the system which route it would use to reach the internet. On a network with no default route that lookup fails, no certificates are created, and no service starts. The route here leads nowhere, which is enough.</p></div>
+</section>
+
+<section class="step">
+<h2>Create the server VM</h2>
+<p>Follow <a href="02-server-vm.html">Create the server VM</a> exactly as written; nothing in it needs the internet. Then confirm, in the server VM, that it is cut off:</p>
+<pre class="cmd" data-on="rhem">
+ip route
+curl -m 5 https://cdn.redhat.com
+</pre>
+<pre class="out">
+default via 192.168.160.1 dev eth0 proto dhcp src 192.168.160.10 metric 100
+192.168.160.0/24 dev eth0 proto kernel scope link src 192.168.160.10 metric 100
+curl: (6) Could not resolve host: cdn.redhat.com
+</pre>
+<p>Copy the four files to it. On the workstation:</p>
+<pre class="cmd" data-on="host">
+scp -F ~/edgelab/ssh_config offline/rhem-bundle.tar.gz offline/gateway-image.tar offline/mirror-registry.tar.gz offline/lab-images.tar rhem:
+</pre>
+</section>
+
+<section class="step">
+<h2>Install the packages from the bundle</h2>
+<pre class="cmd" data-on="rhem">
+mkdir ~/rhem-bundle
+tar -xzf ~/rhem-bundle.tar.gz -C ~/rhem-bundle
+cd ~/rhem-bundle
+ls
+./install-rpms.sh
+rpm -q flightctl-services flightctl-cli podman skopeo
+</pre>
+<pre class="out">
+artifact-manifest-rhem-el9.yaml  images  import.sh  install-rpms.sh  rpms
+...output omitted...
+RPM installation complete.
+flightctl-services-1.4.0-1.el9.x86_64
+flightctl-cli-1.4.0-1.el9.x86_64
+podman-5.8.5-3.el9_9.x86_64
+skopeo-1.22.2-5.el9_9.x86_64
+</pre>
+<p>Do this first. A fresh RHEL guest image has no <code>podman</code> or <code>skopeo</code>, and the next steps need both; they are among the bundle's RPMs. This replaces steps 1 to 4 of <a href="03-install-rhem.html">Install Red Hat Edge Manager</a>: registering the server, enabling the repository, installing the packages, and the pull secret, which is not needed offline.</p>
+</section>
+
+<section class="step">
+<h2>Start a local registry and import the images</h2>
+<p>Edge Manager's services pull their images when they start. Offline, those pulls are answered by a small registry on the server itself, which is included in the bundle:</p>
+<pre class="cmd" data-on="rhem">
+sudo skopeo copy "dir:/home/cloud-user/rhem-bundle/images/library/registry:2" containers-storage:docker.io/library/registry:2
+mkdir ~/registry-data
+sudo podman run -d --name local-registry --network=host --security-opt label=disable -v /home/cloud-user/registry-data:/var/lib/registry --restart=always docker.io/library/registry:2
+sudo systemctl enable podman-restart.service
+curl http://localhost:5000/v2/
+</pre>
+<pre class="out">
+{}
+</pre>
+<p>Import the bundled images, and the gateway image you fetched separately:</p>
+<pre class="cmd" data-on="rhem">
+sudo ./import.sh
+cd ~
+tar -xf gateway-image.tar
+sudo skopeo copy --dest-tls-verify=false dir:/home/cloud-user/gateway-image docker://localhost:5000/rhel9/nginx-124:1-1792441608
+curl http://localhost:5000/v2/_catalog
+</pre>
+<pre class="out">
+Import complete: 22 images imported to localhost:5000
+...output omitted...
+{"repositories":["library/registry","openshift4/ose-cli-rhel9", … ,"rhel9/nginx-124", … ]}
+</pre>
+<div class="admon important"><p class="admon-title">Important</p><p>Run the registry and the import with <code>sudo</code>. A registry started as your own user stops when you log out. An import run as your own user stores the image signatures in your home folder, where the system's podman does not look.</p></div>
+</section>
+
+<section class="step">
+<h2>Point podman at the local registry</h2>
+<p>Add these four blocks at the end of the registries configuration, so that a pull from any of the public registries is answered by the local one:</p>
+<pre class="cmd" data-on="rhem">
+sudo vi /etc/containers/registries.conf
+</pre>
+<pre class="file">
+[[registry]]
+prefix = "registry.redhat.io"
+location = "localhost:5000"
+insecure = true
+
+[[registry]]
+prefix = "registry.access.redhat.com"
+location = "localhost:5000"
+insecure = true
+
+[[registry]]
+prefix = "quay.io"
+location = "localhost:5000"
+insecure = true
+
+[[registry]]
+prefix = "docker.io"
+location = "localhost:5000"
+insecure = true
+</pre>
+<p>RHEL only accepts Red Hat's images when their signatures check out, and by default it fetches the signatures from the internet. The import stored them on the server. Edit two files so that the lookup is local. In each, replace the address after <code>sigstore:</code> so that the line reads as shown, keeping its indentation:</p>
+<pre class="cmd" data-on="rhem">
+sudo vi /etc/containers/registries.d/registry.redhat.io.yaml
+sudo vi /etc/containers/registries.d/registry.access.redhat.com.yaml
+</pre>
+<pre class="file">
+         sigstore: file:///var/lib/containers/sigstore
+</pre>
+<p>Test a pull. It is answered locally and its signature is verified:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman pull registry.redhat.io/rhel9/postgresql-16:9.7-1766414426
+</pre>
+<pre class="out">
+Trying to pull registry.redhat.io/rhel9/postgresql-16:9.7-1766414426...
+...output omitted...
+Storing signatures
+</pre>
+<div class="admon note"><p class="admon-title">Note</p><p>Without the signature change, every pull fails with "A signature was required, but no signature exists". Signature checking stays on; only the place it reads from changes.</p></div>
+</section>
+
+<section class="step">
+<h2>Configure and start Edge Manager</h2>
+<p>Continue with <a href="03-install-rhem.html">Install Red Hat Edge Manager</a> from step 5, "Tell Edge Manager its name", to the end. The first start is quicker than when connected, because the images come from the same machine.</p>
+<p>Then do <a href="04-first-login.html">Log in for the first time</a> as written.</p>
+</section>
+
+<section class="step">
+<h2>Install the registry from the carried archive</h2>
+<p>In <a href="05-registry.html">Install a registry</a>, replace step 1 (the download and its checksum) with:</p>
+<pre class="cmd" data-on="rhem">
+mkdir ~/mirror-registry
+cd ~/mirror-registry
+tar xzf ~/mirror-registry.tar.gz
+</pre>
+<p>The rest of that module is unchanged: the installer carries its own images.</p>
+</section>
+
+<section class="step">
+<h2>Build the device image from local content</h2>
+<p>Before you start <a href="06-device-image.html">Build the device image</a>, load the three images you saved:</p>
+<pre class="cmd" data-on="rhem">
+sudo podman load -i ~/lab-images.tar
+</pre>
+<pre class="out">
+Loaded image: registry.redhat.io/rhel9/rhel-bootc:9.8
+Loaded image: registry.redhat.io/rhel9/bootc-image-builder:latest
+Loaded image: registry.access.redhat.com/ubi9/nginx-124:latest
+</pre>
+<p>Then follow <a href="06-device-image.html">Build the device image</a> with three differences.</p>
+<p><b>The Containerfile.</b> The agent is installed from the bundle's RPMs, not from Red Hat's CDN. In step 3, "Write the Containerfile", this replaces the first <code>RUN</code> instruction and the comment above it, the one that enables the Edge Manager repository and installs <code>flightctl-agent</code>:</p>
+<pre class="file">
+# The Edge Manager agent, from the RPMs in the offline bundle (mounted at /rpms during the build).
+RUN dnf -y install --nogpgcheck --disablerepo="*" --repofrompath=bundle,/rpms --enablerepo=bundle flightctl-agent &amp;&amp; \
+    dnf -y clean all &amp;&amp; \
+    systemctl enable flightctl-agent.service
+</pre>
+<p><b>The build.</b> In step 4, "Build and push the OS image", offer the bundle's RPM folder to the build with <code>-v</code>. The push is unchanged:</p>
+<pre class="cmd" data-on="rhem">
+cd ~/device
+sudo podman build -v /home/cloud-user/rhem-bundle/rpms:/rpms:ro,z -t rhem.lab.internal:8443/admin/edge-os:v1 .
+</pre>
+<p><b>The disk image.</b> In step 5, "Turn the image into a disk", in the <code>bootc-image-builder</code> command, use <code>--pull=never</code> in place of <code>--pull=newer</code>, so that it uses the builder image you loaded.</p>
+<p>Use the same <code>-v</code> option when you rebuild the image as <code>v2</code> in <a href="10-updates.html">Update and roll back the operating system</a>.</p>
+</section>
+
+<section class="step">
+<h2>Do the rest of the lab</h2>
+<p><a href="07-edge-vms.html">Create and enroll edge devices</a>, <a href="08-fleet.html">Manage devices as a fleet</a>, <a href="09-workloads.html">Deploy a workload</a> and <a href="10-updates.html">Update and roll back the operating system</a> need no changes. Devices only ever talk to the server and the lab registry.</p>
+<p>In <a href="11-teardown.html">Remove the lab</a>, skip the first step: the server was never registered.</p>
+</section>
+
+<h2>Evaluation</h2>
+<p>The <code>lab</code> command works as in the connected lab. It recognises a disconnected install by the folder <code>~/edgelab/offline</code>, and does not expect the server to be registered.</p>
+<pre class="cmd" data-on="host">
+./lab status
+</pre>
+<p>Timings seen with no internet access: packages installed from the bundle in under a minute, images imported in 20 seconds, the device image built in 45 seconds and its disk in a little over two minutes, the application on all three devices two minutes after the fleet change, and an operating system update on all three in a little over three minutes.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

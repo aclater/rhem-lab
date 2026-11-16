@@ -1,0 +1,23 @@
+# SSH settings for the lab VMs. Use:  ssh -F ~/edgelab/ssh_config rhem
+Host rhem
+  HostName 192.168.160.10
+  User cloud-user
+Host prep
+  HostName 192.168.160.11
+  User cloud-user
+Host edge-1
+  HostName 192.168.160.21
+  User lab
+Host edge-2
+  HostName 192.168.160.22
+  User lab
+Host edge-3
+  HostName 192.168.160.23
+  User lab
+Host *
+  IdentityFile ~/edgelab/keys/id_ed25519
+  IdentitiesOnly yes
+  UserKnownHostsFile ~/edgelab/keys/known_hosts
+  StrictHostKeyChecking accept-new
+  IgnoreUnknown WarnWeakCrypto
+  WarnWeakCrypto no-pq-kex

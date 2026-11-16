@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deploy a workload</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 9 <span class="exname">workload-deploy</span></p>
+<h1>Deploy a workload</h1>
+<p class="lede">Package an application as a container image, add it to the fleet, and watch all three devices start running it. Then ship a new version the same way.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>A small web application, <code>hello</code>, in your registry as versions <code>v1</code> and <code>v2</code>.</li>
+  <li>All three devices serving it on port 8080, deployed and updated only by editing the fleet.</li>
+</ul>
+</div>
+
+<h2>Before you begin</h2>
+<p>On the workstation, in <code>~/edgelab</code>, confirm that the earlier exercises are complete:</p>
+<pre class="cmd" data-on="host">
+./lab start workload-deploy
+</pre>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Build the application image</h2>
+<pre class="cmd" data-on="rhem">
+mkdir -p ~/apps/hello
+cd ~/apps/hello
+cat > Containerfile &lt;&lt;'EOF'
+FROM registry.access.redhat.com/ubi9/nginx-124:latest
+ARG APP_VERSION=dev
+USER 0
+RUN printf "&lt;h1&gt;Hello from the edge&lt;/h1&gt;\n&lt;p&gt;Version: %s&lt;/p&gt;\n" "${APP_VERSION}" > /opt/app-root/src/index.html &amp;&amp; \
+    chown 1001:0 /opt/app-root/src/index.html
+USER 1001
+EXPOSE 8080
+CMD ["nginx", "-g", "daemon off;"]
+EOF
+sudo podman build --build-arg APP_VERSION=v1 -t rhem.lab.internal:8443/admin/hello:v1 .
+sudo podman push rhem.lab.internal:8443/admin/hello:v1
+</pre>
+<ul>
+  <li>The base is Red Hat's UBI 9 nginx image, which is free to use and redistribute and needs no login.</li>
+  <li>The page shows its own version, so you can see which one a device is serving.</li>
+  <li>The image runs as a non-root user and listens on 8080. Both matter in the next step.</li>
+</ul>
+</section>
+
+<section class="step">
+<h2>Add the application to the fleet</h2>
+<p>Add an <code>applications</code> section to the template. The whole file again, so you can paste it:</p>
+<pre class="cmd" data-on="rhem">
+cat > ~/fleet/lab-fleet.yaml &lt;&lt;'EOF'
+apiVersion: flightctl.io/v1beta1
+kind: Fleet
+metadata:
+  name: lab
+spec:
+  selector:
+    matchLabels:
+      site: lab
+  template:
+    spec:
+      os:
+        image: rhem.lab.internal:8443/admin/edge-os:v1
+      applications:
+        - name: hello
+          appType: container
+          image: rhem.lab.internal:8443/admin/hello:v1
+          runAs: flightctl
+          ports:
+            - "8080:8080"
+EOF
+flightctl apply -f ~/fleet/lab-fleet.yaml
+</pre>
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>appType: container</code></td><td>Run one container image as a service. Other types are <code>quadlet</code> and <code>compose</code> for applications made of several containers, <code>helm</code> for devices that run MicroShift, and <code>vm</code>.</td></tr>
+<tr><td><code>image</code></td><td>Where the device pulls the application from: your registry.</td></tr>
+<tr><td><code>runAs: flightctl</code></td><td>Run the container as the unprivileged <code>flightctl</code> user on the device (rootless), not as root. The user exists because the agent package created it in your OS image.</td></tr>
+<tr><td><code>ports</code></td><td>Publish the container's port 8080 on the device's port 8080.</td></tr>
+</table>
+</section>
+
+<section class="step">
+<h2>Watch the rollout</h2>
+<pre class="cmd" data-on="rhem">
+watch -n 5 flightctl get devices
+</pre>
+<p>Over about two minutes the devices go through these states (leave <code>watch</code> with <kbd>Ctrl</kbd>+<kbd>C</kbd>):</p>
+<table>
+<tr><th>UPDATED</th><th>APPLICATIONS</th><th>What the device is doing</th></tr>
+<tr><td><code>Updating</code></td><td><code>NoApplications</code></td><td>It has fetched the new spec and is downloading the application image.</td></tr>
+<tr><td><code>UpToDate</code></td><td><code>Degraded</code></td><td>The spec is applied; the application is installed but not yet reporting as running.</td></tr>
+<tr><td><code>UpToDate</code></td><td><code>Healthy</code></td><td>The container is running.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p><code>Degraded</code> for a short while after a change is normal: it means "not all applications are running yet". It is a problem only if it stays.</p></div>
+<p>From the workstation, ask each device for the page:</p>
+<pre class="cmd" data-on="host">
+curl http://192.168.160.21:8080/
+curl http://192.168.160.22:8080/
+curl http://192.168.160.23:8080/
+</pre>
+<pre class="out">
+&lt;h1&gt;Hello from the edge&lt;/h1&gt;
+&lt;p&gt;Version: v1&lt;/p&gt;
+</pre>
+</section>
+
+<section class="step">
+<h2>See how it runs on the device</h2>
+<p>Ask the server what the device reports:</p>
+<pre class="cmd" data-on="rhem">
+flightctl get devices -l alias=edge-1 -o yaml | less
+</pre>
+<p>In <code>less</code>, enter <code>/status:</code> to jump to what the device reports, then find <code>applications:</code> just below it; <code>q</code> quits.</p>
+<pre class="out">
+  status:
+    applications:
+    - appType: container
+      …
+      name: hello
+      ready: 1/1
+      restarts: 0
+      runAs: flightctl
+      status: Running
+    applicationsSummary:
+      info: Device's application workloads are healthy.
+</pre>
+<p>Now look on the device itself. Log in to it from the workstation:</p>
+<pre class="cmd" data-on="host">
+ssh -F ~/edgelab/ssh_config edge-1
+</pre>
+<p>The application runs as the <code>flightctl</code> user, so become that user and look around:</p>
+<pre class="cmd" data-on="edge-1">
+sudo -u flightctl -i
+podman ps
+cat .config/containers/systemd/hello/*.container
+exit
+</pre>
+<pre class="out">
+CONTAINER ID  IMAGE                                  COMMAND               CREATED        STATUS        PORTS                             NAMES
+794191ca43ba  rhem.lab.internal:8443/admin/hello:v1  nginx -g daemon o...  2 minutes ago  Up 2 minutes  0.0.0.0:8080->8080/tcp, 8443/tcp  systemd-hello-flightctl-…-app
+
+[Container]
+Image=rhem.lab.internal:8443/admin/hello:v1
+PublishPort=8080:8080
+
+[Service]
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
+</pre>
+<p>Leave the device with <code>exit</code>.</p>
+<div class="admon note"><p class="admon-title">Note</p><p><b>No magic.</b> The agent turned your four lines of YAML into a quadlet in the <code>flightctl</code> user's home, and systemd runs it: the same mechanism that runs Edge Manager on the server. If the container crashes, systemd restarts it, with or without a connection to the server. The application keeps running through any outage of the management side.</p></div>
+</section>
+
+<section class="step">
+<h2>Ship version 2</h2>
+<p>An application update is a new image tag and a one-line change to the fleet. Build and push version 2:</p>
+<pre class="cmd" data-on="rhem">
+cd ~/apps/hello
+sudo podman build --build-arg APP_VERSION=v2 -t rhem.lab.internal:8443/admin/hello:v2 .
+sudo podman push rhem.lab.internal:8443/admin/hello:v2
+</pre>
+<p>Edit the fleet file and change the application's image tag from <code>v1</code> to <code>v2</code>. It is the last <code>image:</code> line in the file; leave the <code>os</code> image line alone.</p>
+<pre class="cmd" data-on="rhem">
+vi ~/fleet/lab-fleet.yaml
+</pre>
+<p>Confirm the change and apply it:</p>
+<pre class="cmd" data-on="rhem">
+grep image: ~/fleet/lab-fleet.yaml
+flightctl apply -f ~/fleet/lab-fleet.yaml
+</pre>
+<pre class="out">
+        image: rhem.lab.internal:8443/admin/edge-os:v1
+          image: rhem.lab.internal:8443/admin/hello:v2
+/home/cloud-user/fleet/lab-fleet.yaml: applying fleet/lab: 200 OK
+</pre>
+<p>Wait about two minutes, then ask the devices again:</p>
+<pre class="cmd" data-on="host">
+curl -s http://192.168.160.21:8080/ | grep Version
+curl -s http://192.168.160.22:8080/ | grep Version
+curl -s http://192.168.160.23:8080/ | grep Version
+</pre>
+<pre class="out">
+&lt;p&gt;Version: v2&lt;/p&gt;
+&lt;p&gt;Version: v2&lt;/p&gt;
+&lt;p&gt;Version: v2&lt;/p&gt;
+</pre>
+<p>All three devices changed at about the same time, because nothing in the fleet says otherwise. The next module controls that.</p>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Tags are a decision.</b> The fleet names an exact version, <code>v2</code>, not <code>latest</code>. What runs at the edge changes only when the fleet file changes, and going back is the same edit in reverse.</p></div>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade workload-deploy
+</pre>
+<p>You can also look yourself:</p>
+<pre class="cmd" data-on="rhem">
+flightctl get devices
+</pre>
+<p>All three devices show <code>UpToDate</code>, and <code>Healthy</code> in both the applications and system columns.</p>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish workload-deploy
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install a registry</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 5 <span class="exname">registry-install</span></p>
+<h1>Install a registry</h1>
+<p class="lede">Devices get their operating system and their applications as container images. Those images have to live somewhere the devices can reach. Here that is a registry on the server VM.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>Red Hat's mirror registry (a small Quay) running on <code>rhem</code> at <code>rhem.lab.internal:8443</code>.</li>
+  <li>The server VM trusts the registry's certificate and is logged in to push.</li>
+  <li>Anyone on the lab network can pull what you push, without a login.</li>
+</ul>
+</div>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why your own registry?</b> Edge Manager never sends images to devices. It only tells a device <i>which</i> image to run; the device pulls it. So the registry must be reachable from the edge, and it is as much a part of the deployment as the server. Putting it next to the server means one machine carries everything a device needs.</p></div>
+
+<h2>Before you begin</h2>
+<p>On the workstation, in <code>~/edgelab</code>, confirm that the earlier exercises are complete:</p>
+<pre class="cmd" data-on="host">
+./lab start registry-install
+</pre>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Download the mirror registry</h2>
+<pre class="cmd" data-on="rhem">
+mkdir ~/mirror-registry
+cd ~/mirror-registry
+curl -LO https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/mirror-registry/1.3.11/mirror-registry.tar.gz
+curl -sL https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/mirror-registry/1.3.11/sha256sum.txt | sha256sum -c --ignore-missing
+tar xzf mirror-registry.tar.gz
+ls
+</pre>
+<pre class="out">
+mirror-registry.tar.gz: OK
+execution-environment.tar  image-archive.tar  mirror-registry  mirror-registry.tar.gz
+</pre>
+<p>About 730 MB. The archive carries the installer and the container images it needs, so the install itself downloads nothing.</p>
+<div class="admon note"><p class="admon-title">Note</p><p><b>What it is.</b> "Mirror registry for Red Hat OpenShift" is a single-machine build of Quay that Red Hat ships for disconnected installs. It is used here as a general-purpose registry for the lab's own images. Any registry that speaks the standard protocol over TLS would do; this one is Red Hat's and installs with one command.</p></div>
+</section>
+
+<section class="step">
+<h2>Install it</h2>
+<p>The registry has its own administrator account, separate from the Edge Manager <code>admin</code> you created in module 4. Install the registry and give that account the lab password:</p>
+<pre class="cmd" data-on="rhem">
+sudo ./mirror-registry install --quayHostname rhem.lab.internal:8443 --quayRoot /opt/quay --initUser admin --initPassword edgelab123
+</pre>
+<p>It runs for about two minutes and ends with:</p>
+<pre class="out">
+Quay installed successfully, config data is stored in /opt/quay
+Quay is available at https://rhem.lab.internal:8443 with credentials (admin, …)
+</pre>
+<table>
+<tr><th>Option</th><th>Effect</th></tr>
+<tr><td><code>--quayHostname rhem.lab.internal:8443</code></td><td>The name and port in the registry's certificate, and therefore in every image reference from now on. Edge Manager already uses 443, so the registry takes 8443.</td></tr>
+<tr><td><code>--initUser admin --initPassword edgelab123</code></td><td>The registry's first account and its password.</td></tr>
+<tr><td><code>--quayRoot /opt/quay</code></td><td>Where its configuration and its own certificate authority are written.</td></tr>
+<tr><td><code>sudo</code></td><td>Installs it as system services (<code>quay-app</code>, <code>quay-postgres</code>, <code>quay-redis</code>), which start at boot like Edge Manager's.</td></tr>
+</table>
+<pre class="cmd" data-on="rhem">
+systemctl list-units "quay*" --no-pager --plain --no-legend
+</pre>
+</section>
+
+<section class="step">
+<h2>Let devices pull without a login</h2>
+<p>By default, a repository created by pushing an image is private. Change that default, so what you push is readable by anyone who can reach the registry:</p>
+<pre class="cmd" data-on="rhem">
+echo "CREATE_PRIVATE_REPO_ON_PUSH: false" | sudo tee -a /opt/quay/quay-config/config.yaml
+sudo systemctl restart quay-app
+</pre>
+<div class="admon note"><p class="admon-title">Note</p><p><b>The trade-off.</b> With public repositories, a device needs only to <i>trust</i> the registry, not to hold a password for it. That keeps secrets out of the device image. It is right for this lab, where the registry is only reachable on the lab network. For private repositories, Edge Manager's documentation has you place a pull secret on the device: <code>/etc/ostree/auth.json</code> for OS images and <code>/root/.config/containers/auth.json</code> for application images.</p></div>
+</section>
+
+<section class="step">
+<h2>Trust the registry and log in</h2>
+<p>The installer created a small certificate authority of its own and signed the registry's certificate with it. Add that CA to the server VM's trust store, as you did for Edge Manager's CA, then log in:</p>
+<pre class="cmd" data-on="rhem">
+sudo install -m 0644 /opt/quay/quay-rootCA/rootCA.pem /etc/pki/ca-trust/source/anchors/lab-registry-ca.crt
+sudo update-ca-trust
+curl -I https://rhem.lab.internal:8443/health/instance
+sudo podman login --authfile /root/.config/containers/auth.json -u admin -p edgelab123 rhem.lab.internal:8443
+</pre>
+<pre class="out">
+HTTP/2 200
+...output omitted...
+Login Succeeded!
+</pre>
+<ul>
+  <li>The login is for <b>root's</b> podman (<code>sudo</code>), because the device image is built and pushed as root in the next module.</li>
+  <li><code>--authfile /root/.config/containers/auth.json</code> adds the login to the file that already holds your Red Hat registry login. Without it, <code>podman login</code> writes under <code>/run</code>, and the login is lost when the server restarts.</li>
+</ul>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Two CAs now.</b> Edge Manager's CA says "this is the real management server" and signs device identities. The registry's CA says "this is the real registry". Every device image you build has to carry both, or the device will refuse to talk to one of them. Keep them in mind as two separate things to protect and to distribute.</p></div>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade registry-install
+</pre>
+<p>You can also check by hand:</p>
+<pre class="cmd" data-on="rhem">
+systemctl is-active quay-app flightctl.target
+sudo podman login --get-login rhem.lab.internal:8443
+</pre>
+<pre class="out">
+active
+active
+admin
+</pre>
+<p>You can also open <code>https://rhem.lab.internal:8443</code> in your browser and log in as <code>admin</code> with the password <code>edgelab123</code> to see repositories appear as you push them. It needs the same workstation name lookup as the Edge Manager UI, and shows a certificate warning for the same reason.</p>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish registry-install
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

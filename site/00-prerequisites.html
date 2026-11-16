@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prepare the workstation</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body data-host-dir="~">
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 0 <span class="exname">prep-workstation</span></p>
+<h1>Prepare the workstation</h1>
+<p class="lede">Get the workstation ready, download three things from Red Hat, and set up the folder you will work in.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>A workstation that can run KVM virtual machines as your user.</li>
+  <li>A working folder <code>~/edgelab</code> holding the lab files and your three inputs under fixed names.</li>
+</ul>
+</div>
+
+<h2>Before you begin</h2>
+<table>
+<tr><th>Requirement</th><th>Detail</th></tr>
+<tr><td>Workstation</td><td>x86_64 Linux with KVM (<code>/dev/kvm</code> exists). Written and tested on Fedora. On RHEL 9.8 and RHEL 10.2 the workstation steps were tested as far as creating the server VM.</td></tr>
+<tr><td>Free capacity</td><td>A machine with 16 GB of memory is enough: the four VMs are given 10.5 GiB between them (6 GiB for the server, 1.5 GiB for each of three devices). They need 50 GB of free disk space, and 4 or more CPU threads.</td></tr>
+<tr><td>Red Hat account</td><td>With a subscription that includes Red Hat Edge Manager. Module 3 shows how to check: the server must be offered an <code>edge-manager</code> repository.</td></tr>
+<tr><td>Internet access</td><td>From the workstation, to <code>registry.redhat.io</code>, <code>cdn.redhat.com</code>, <code>subscription.rhsm.redhat.com</code> and <code>mirror.openshift.com</code>.</td></tr>
+</table>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Prepare the workstation</h2>
+<p>Install the virtualization tools and let your user manage system VMs:</p>
+<pre class="cmd" data-on="host">
+sudo dnf install -y libvirt qemu-kvm qemu-img virt-install git make openssl
+sudo systemctl enable --now libvirtd
+sudo usermod -aG libvirt "$USER"
+</pre>
+<p>Every package is in the standard RHEL repositories: this list was checked against RHEL 9.8 and RHEL 10.2 (BaseOS and AppStream), and it is the same on Fedora. In the last command, <code>"$USER"</code> is your own login name; the shell fills it in, so type the command exactly as shown.</p>
+<p>Log out and back in so the group membership applies, then check:</p>
+<pre class="cmd" data-on="host">
+virsh -c qemu:///system list --all
+virt-install --version
+ls -l /dev/kvm
+</pre>
+<p>The first command must print a table (possibly empty) without asking for a password.</p>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why the system libvirt?</b> libvirt has two modes. Your personal one (<code>qemu:///session</code>) needs no privileges but cannot give VMs a shared network of their own. The system one (<code>qemu:///system</code>) can, and the lab needs that: devices have to reach the server by name. Membership of the <code>libvirt</code> group is what lets you use it without sudo.</p></div>
+</section>
+
+<section class="step">
+<h2>Create the working folder</h2>
+<p>One folder holds everything the lab puts on the workstation. Deleting it at the end removes the lab's files.</p>
+<pre class="cmd" data-on="host">
+mkdir ~/edgelab
+cd ~/edgelab
+git clone https://github.com/aclater/rhem-lab.git guide
+cp guide/files/* .
+ln -s guide/lab lab
+mkdir images keys inputs
+chmod 700 keys
+chattr +C images
+chmod o+x ~
+ls
+</pre>
+<pre class="out">
+guide  images  inputs  keys  lab  network-disconnected.xml  network.xml  ssh_config
+</pre>
+<table>
+<tr><th>In <code>~/edgelab</code></th><th>What it is</th></tr>
+<tr><td><code>guide/</code></td><td>This guide's repository. <code>make -C guide serve</code> starts a small web server for the guide in the background and prints its address: <code>http://127.0.0.1:8765/</code>, or the next free port if 8765 is taken. <code>make -C guide stop</code> stops it.</td></tr>
+<tr><td><code>network.xml</code>, <code>ssh_config</code></td><td>Two small lab files copied out of the repository: the network definition, and SSH settings for the VMs. You read each one before using it.</td></tr>
+<tr><td><code>lab</code></td><td>A link to the guide's <code>lab</code> command, which checks your work: <code>./lab start</code>, <code>./lab grade</code> and <code>./lab finish</code> for each exercise, and <code>./lab status</code> at any time. It only reads.</td></tr>
+<tr><td><code>inputs/</code></td><td>The three files you download next.</td></tr>
+<tr><td><code>images/</code></td><td>VM disks. Kept out of the git clone on purpose.</td></tr>
+<tr><td><code>keys/</code></td><td>An SSH key made for this lab only (module 1).</td></tr>
+</table>
+<p><code>chattr +C</code> turns off copy-on-write for new files in <code>images</code>. On btrfs, VM disks with copy-on-write fragment badly and get slow. On other filesystems the command may print an error you can ignore.</p>
+<p><code>chmod o+x ~</code> lets the system's VM service, which runs as the user <code>qemu</code>, pass through your home folder to reach the disks in <code>images</code>. It allows passing through only: other users still cannot list or read your files. On RHEL a home folder is closed to other users, and without this <code>virt-install</code> fails with "Cannot access storage file".</p>
+</section>
+
+<section class="step">
+<h2>Download the three inputs</h2>
+<p>Save each file under exactly the name shown. The rest of the guide refers to these names. The image keeps the file name Red Hat gives it.</p>
+<table>
+<tr><th>Save as</th><th>What it is</th><th>Where to get it</th></tr>
+<tr><td><code>~/edgelab/inputs/rhel-9.8-x86_64-kvm.qcow2</code></td><td>The RHEL 9.8 KVM guest image, about 1.4 GB. The server VM's disk starts as a copy of it.</td><td><a href="https://access.redhat.com/downloads/content/rhel" target="_blank" rel="noopener">access.redhat.com/downloads/content/rhel</a>: choose version 9.8, then "Red Hat Enterprise Linux 9.8 KVM Guest Image".</td></tr>
+<tr><td><code>~/edgelab/inputs/rhsm-activation</code></td><td>A two-line text file you write yourself:<br><code>org=1234567</code><br><code>key=my-activation-key</code></td><td><a href="https://console.redhat.com/insights/connector/activation-keys" target="_blank" rel="noopener">console.redhat.com → Activation keys</a>: create a key (or reuse one). The page shows your organization ID.</td></tr>
+<tr><td><code>~/edgelab/inputs/pull-secret.json</code></td><td>Your Red Hat pull secret: a JSON file with a login for <code>registry.redhat.io</code>.</td><td><a href="https://console.redhat.com/openshift/install/pull-secret" target="_blank" rel="noopener">console.redhat.com → Pull secret</a>: "Download pull secret".</td></tr>
+</table>
+<p>If you already keep any of these somewhere else, link instead of copying, for example <code>ln -s /path/to/your/pull-secret.json inputs/pull-secret.json</code>.</p>
+<p>Protect the two secrets and check all three:</p>
+<pre class="cmd" data-on="host">
+chmod 600 inputs/rhsm-activation inputs/pull-secret.json
+ls -lL inputs
+qemu-img info inputs/rhel-9.8-x86_64-kvm.qcow2
+</pre>
+<pre class="out">
+image: inputs/rhel-9.8-x86_64-kvm.qcow2
+file format: qcow2
+virtual size: 10 GiB (10737418240 bytes)
+...output omitted...
+</pre>
+<p>The image must be reported as <code>qcow2</code>. The grading at the end of this module checks the content of the other two files for you.</p>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why these three?</b> The guest image saves you an operating system install. The activation key registers machines without anyone's password, which is also how you would register hundreds of servers or a build pipeline. The pull secret lets the server download Edge Manager's containers. Neither secret is ever copied into the repository or printed by a command in this guide.</p></div>
+<div class="admon note"><p class="admon-title">Note</p><p>The download pages and their wording are as found at the time of writing and may move. Two more things are downloaded later, from inside the server VM, when they are needed: the Edge Manager packages (module 3) and Red Hat's mirror registry (module 5).</p></div>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade prep-workstation
+</pre>
+<p>You can also look yourself:</p>
+<pre class="cmd" data-on="host">
+ls -L inputs
+</pre>
+<pre class="out">
+pull-secret.json  rhel-9.8-x86_64-kvm.qcow2  rhsm-activation
+</pre>
+<p>From here on, every workstation command assumes your terminal is in <code>~/edgelab</code>.</p>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish prep-workstation
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

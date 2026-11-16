@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Update and roll back the operating system</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Guided exercise 10 <span class="exname">os-update</span></p>
+<h1>Update and roll back the operating system</h1>
+<p class="lede">Update the operating system of the whole fleet, one device first and the rest only if that one succeeds. Then go back to the previous version.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>A second OS release, <code>edge-os:v2</code>, in your registry.</li>
+  <li>All three devices updated to it in two stages, without logging in to any of them.</li>
+  <li>The fleet returned to <code>v1</code>, to see what going back looks like.</li>
+</ul>
+</div>
+<div class="admon note"><p class="admon-title">Note</p><p><b>How an image mode update works.</b> The device downloads the new OS image next to the running one, marks it for the next boot, and reboots. The previous image stays on disk. So an OS update is one reboot long, the same on every device, and reversible. Applications are pulled again only if their images changed.</p></div>
+
+<h2>Before you begin</h2>
+<p>On the workstation, in <code>~/edgelab</code>, confirm that the earlier exercises are complete:</p>
+<pre class="cmd" data-on="host">
+./lab start os-update
+</pre>
+
+<h2>Instructions</h2>
+
+<section class="step">
+<h2>Build OS release v2</h2>
+<p>Make a small visible change to the OS: a file that says which release this is. Edit the Containerfile:</p>
+<pre class="cmd" data-on="rhem">
+cd ~/device
+vi Containerfile
+</pre>
+<p>Add this line just above the last line of the file, <code>RUN bootc container lint</code>, then save and quit:</p>
+<pre class="file">
+RUN echo "edge-os v2" > /etc/edge-os-version
+</pre>
+<p>Confirm the change, then build and push the image under the new tag:</p>
+<pre class="cmd" data-on="rhem">
+tail -3 Containerfile
+sudo podman build -t rhem.lab.internal:8443/admin/edge-os:v2 .
+sudo podman push rhem.lab.internal:8443/admin/edge-os:v2
+</pre>
+<pre class="out">
+RUN echo "edge-os v2" > /etc/edge-os-version
+
+RUN bootc container lint
+</pre>
+<ul>
+  <li>In practice this step is where security fixes arrive: rebuilding from the current RHEL base image picks up the latest packages.</li>
+  <li>No new disk image is needed. Disk images are only for installing new devices; existing devices take the OS image from the registry.</li>
+  <li><code>v1</code> stays in the registry untouched. You need it to go back.</li>
+</ul>
+</section>
+
+<section class="step">
+<h2>Change the fleet: new OS, one device first</h2>
+<pre class="cmd" data-on="rhem">
+cat > ~/fleet/lab-fleet.yaml &lt;&lt;'EOF'
+apiVersion: flightctl.io/v1beta1
+kind: Fleet
+metadata:
+  name: lab
+spec:
+  selector:
+    matchLabels:
+      site: lab
+  rolloutPolicy:
+    deviceSelection:
+      strategy: BatchSequence
+      sequence:
+        - selector:
+            matchLabels:
+              alias: edge-1
+          limit: 1
+    successThreshold: 100%
+  template:
+    spec:
+      os:
+        image: rhem.lab.internal:8443/admin/edge-os:v2
+      applications:
+        - name: hello
+          appType: container
+          image: rhem.lab.internal:8443/admin/hello:v2
+          runAs: flightctl
+          ports:
+            - "8080:8080"
+EOF
+flightctl apply -f ~/fleet/lab-fleet.yaml
+</pre>
+<p>Two things changed: <code>os.image</code> is now <code>v2</code>, and there is a <code>rolloutPolicy</code>.</p>
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>sequence</code></td><td>The batches, in order. Here one batch: at most one device (<code>limit: 1</code>) from those labelled <code>alias: edge-1</code>.</td></tr>
+<tr><td>(implicit last batch)</td><td>Every device not picked by an earlier batch. You do not write it down.</td></tr>
+<tr><td><code>successThreshold: 100%</code></td><td>The share of a batch that must update successfully before the next batch starts. With one device in the batch: it must succeed.</td></tr>
+</table>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Why stage a rollout?</b> An OS update that fails to boot on one device will fail on all identical devices. Updating one first limits the damage to one. In a large fleet you would use label selectors and percentages instead of a single name: one device per site, then 10%, then the rest.</p></div>
+</section>
+
+<section class="step">
+<h2>Watch it happen</h2>
+<pre class="cmd" data-on="rhem">
+watch -n 5 flightctl get devices
+</pre>
+<p>What to expect, with the timings seen while writing this guide:</p>
+<table>
+<tr><th>When</th><th>edge-1</th><th>edge-2, edge-3</th></tr>
+<tr><td>At once</td><td><code>Updating</code>: downloading the v2 image</td><td><code>OutOfDate</code>: waiting, still on v1 and still serving the application</td></tr>
+<tr><td>After 2 to 4 minutes</td><td><code>Rebooting</code>, then <code>UpToDate</code></td><td>unchanged</td></tr>
+<tr><td>After 7 to 9 minutes</td><td><code>UpToDate</code></td><td><code>Updating</code>, reboot, <code>UpToDate</code></td></tr>
+</table>
+<p>The fleet reports which batch it is on, and Edge Manager keeps a log of events:</p>
+<pre class="cmd" data-on="rhem">
+flightctl get fleet/lab -o yaml | grep "Rolling out"
+flightctl get events --limit 15
+</pre>
+<pre class="out">
+    message: Rolling out batch 1
+
+AGE              KIND     NAME   TYPE     MESSAGE
+10 seconds ago   Device   1jn3…  Normal   Device is rebooting.
+1 minute ago     Device   1jn3…  Normal   Device is preparing an update to renderedVersion: 4
+1 minute ago     Fleet    lab    Normal   Fleet rollout batch dispatched.
+2 minutes ago    Fleet    lab    Normal   Fleet rollout created.
+</pre>
+<p>When all three are <code>UpToDate</code>, confirm from the workstation that the devices run the new OS and still serve the application:</p>
+<pre class="cmd" data-on="host">
+ssh -F ~/edgelab/ssh_config edge-1 cat /etc/edge-os-version
+ssh -F ~/edgelab/ssh_config edge-2 cat /etc/edge-os-version
+ssh -F ~/edgelab/ssh_config edge-3 cat /etc/edge-os-version
+curl -s http://192.168.160.21:8080/ | grep Version
+</pre>
+<pre class="out">
+edge-os v2
+edge-os v2
+edge-os v2
+&lt;p&gt;Version: v2&lt;/p&gt;
+</pre>
+</section>
+
+<section class="step">
+<h2>Look at what the device kept</h2>
+<pre class="cmd" data-on="edge-1">
+sudo bootc status
+</pre>
+<pre class="out">
+● Booted image: containers-storage:rhem.lab.internal:8443/admin/edge-os:v2
+        Digest: sha256:… (amd64)
+       Version: 9.8 (…)
+
+  Rollback image: containers-storage:rhem.lab.internal:8443/admin/edge-os:v1
+          Digest: sha256:… (amd64)
+         Version: 9.8 (…)
+</pre>
+<p>The device now boots <code>v2</code> and holds <code>v1</code> as its <b>rollback</b> image. Nothing has to be downloaded to go back.</p>
+</section>
+
+<section class="step">
+<h2>Go back to v1</h2>
+<p>Going back is not a special operation. You tell the fleet the devices should run <code>v1</code>, and they make it so:</p>
+<pre class="cmd" data-on="rhem">
+vi ~/fleet/lab-fleet.yaml
+</pre>
+<p>Change the <code>os</code> image tag from <code>v2</code> back to <code>v1</code>, save and quit. Then confirm the change, apply it and watch:</p>
+<pre class="cmd" data-on="rhem">
+grep image: ~/fleet/lab-fleet.yaml
+flightctl apply -f ~/fleet/lab-fleet.yaml
+watch -n 5 flightctl get devices
+</pre>
+<p>Each device reboots into the image it already holds, so nothing is downloaded and this is quicker than the update. In test runs it took between two and a half and six minutes for all three devices to be back on <code>v1</code> and serving the application again (a device shows <code>Updating</code> and <code>NoApplications</code> until then). The shortest run changed all devices at once. Your fleet file still has the rollout policy, so <code>edge-1</code> goes first again and the others follow, which takes longer.</p>
+<pre class="cmd" data-on="host">
+ssh -F ~/edgelab/ssh_config edge-1 sudo bootc status
+</pre>
+<pre class="out">
+● Booted image: containers-storage:rhem.lab.internal:8443/admin/edge-os:v1
+...output omitted...
+  Rollback image: containers-storage:rhem.lab.internal:8443/admin/edge-os:v2
+...output omitted...
+</pre>
+<p>The two images have swapped places: <code>v1</code> is booted, and <code>v2</code> is now the one kept in reserve.</p>
+<div class="admon note"><p class="admon-title">Note</p><p><b>Two kinds of going back.</b> What you just did is a decision made at the server: the fleet says <code>v1</code>. Image mode also supports an automatic kind on the device, where health checks run after an update (greenboot) and a failing image is replaced by the previous one at the next boot. Edge Manager ships a <code>flightctl-greenboot</code> package for that. This lab does not install it or break an image on purpose; the rollback image you saw above is what that mechanism would use.</p></div>
+</section>
+
+<h2>Evaluation</h2>
+<p>On the workstation, in <code>~/edgelab</code>, grade your work. Every line should end in <code>SUCCESS</code>; a <code>FAIL</code> line is followed by what to do about it.</p>
+<pre class="cmd" data-on="host">
+./lab grade os-update
+</pre>
+<p>You can also check by hand:</p>
+<pre class="cmd" data-on="rhem">
+flightctl get devices
+</pre>
+<p>All three devices are <code>UpToDate</code> and <code>Healthy</code>, on the OS release the fleet names.</p>
+<div class="box">
+<h4>What you have built</h4>
+<p>A complete loop: an OS image and an application image in a registry you run, a fleet file that names exact versions of both, and devices that converge on that file by themselves, in stages, with a way back. Every change to the edge was a change to <code>lab-fleet.yaml</code>.</p>
+</div>
+<h2>Finish</h2>
+<pre class="cmd" data-on="host">
+./lab finish os-update
+</pre>
+<p>This confirms that the exercise is complete and names the next one. Nothing is cleaned up, because the later exercises build on what you made here.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

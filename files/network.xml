@@ -1,0 +1,19 @@
+<!-- Private lab network: NAT to the outside, its own DHCP and DNS (libvirt's dnsmasq).
+     Fixed leases keep the addresses in the lab guide true. DNS names come from the DHCP host names:
+     rhem.lab.internal, edge-1.lab.internal, ... -->
+<network>
+  <name>rhem-lab</name>
+  <forward mode='nat'/>
+  <bridge name='virbr-rhem' stp='on' delay='0'/>
+  <domain name='lab.internal' localOnly='yes'/>
+  <ip address='192.168.160.1' netmask='255.255.255.0'>
+    <dhcp>
+      <range start='192.168.160.100' end='192.168.160.199'/>
+      <host mac='52:54:00:a0:00:10' name='rhem' ip='192.168.160.10'/>
+      <host mac='52:54:00:a0:00:11' name='prep' ip='192.168.160.11'/>
+      <host mac='52:54:00:a0:00:21' name='edge-1' ip='192.168.160.21'/>
+      <host mac='52:54:00:a0:00:22' name='edge-2' ip='192.168.160.22'/>
+      <host mac='52:54:00:a0:00:23' name='edge-3' ip='192.168.160.23'/>
+    </dhcp>
+  </ip>
+</network>

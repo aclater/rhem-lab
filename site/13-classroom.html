@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deliver the lab in a classroom</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="layout">
+<nav class="side"></nav>
+<main>
+<p class="eyebrow">Appendix B <span class="exname">classroom</span></p>
+<h1>Deliver the lab in a classroom</h1>
+<p class="lede">For instructors. Prepare the lab once on a connected machine, then give it to students whose workstations have no internet access and no Red Hat account. Each student still builds everything by hand.</p>
+
+<div class="outcomes">
+<h2>Outcomes</h2>
+<ul>
+  <li>A classroom kit: one folder, 6.5 GB, that holds the guide, the RHEL guest image and everything the lab would otherwise download.</li>
+  <li>Student workstations set up from the kit with one command, ready to start the lab with no network at all.</li>
+</ul>
+</div>
+
+<h2>How a class differs from working alone</h2>
+<table>
+<tr><th>Working alone</th><th>In a class</th></tr>
+<tr><td>Each reader has a Red Hat account, an activation key and a pull secret.</td><td>Only the instructor does, and only while building the kit. The kit holds no account details, and student servers are never registered.</td></tr>
+<tr><td>The workstation downloads the guide, the guest image, packages and images.</td><td>Everything comes from the kit. Nothing is downloaded during the class.</td></tr>
+<tr><td>The reader starts at <a href="00-prerequisites.html">Prepare the workstation</a>.</td><td>Students start at <a href="12-disconnected.html">Run the lab disconnected</a>, part 2. The kit replaces part 1 and the downloads of module 0.</td></tr>
+</table>
+<p>Each student's lab runs inside their own workstation, on a private network that exists only there. Workstations do not need to reach each other, the instructor or anything else during the class.</p>
+<div class="admon important"><p class="admon-title">Important</p><p>The kit contains Red Hat software obtained with the instructor's subscription. Confirm that your subscription terms cover the students' use before you hand it out. This guide does not cover licensing.</p></div>
+
+<h2>Before you begin</h2>
+<table>
+<tr><th>Who</th><th>Needs</th></tr>
+<tr><td>Instructor's workstation</td><td>Everything in <a href="00-prerequisites.html">Prepare the workstation</a>, completed, with internet access; the <code>ansible-core</code> package; 15 GB of free disk space on top of the lab's own.</td></tr>
+<tr><td>Each student workstation</td><td>x86_64 RHEL 9, RHEL 10 or Fedora with KVM, 16 GB of memory, 4 or more CPU threads and 60 GB of free disk space. The packages below, installed in advance, and the student's user in the <code>libvirt</code> group.</td></tr>
+</table>
+<p>Install the packages on each student workstation while it still has a package source:</p>
+<pre class="cmd" data-on="host">
+sudo dnf install -y libvirt qemu-kvm qemu-img virt-install make openssl ansible-core
+sudo systemctl enable --now libvirtd
+sudo usermod -aG libvirt "$USER"
+</pre>
+<p>These are the packages of module 0 without <code>git</code>, plus <code>ansible-core</code>. All are in the standard RHEL repositories. The kit does not carry them, because they must match each workstation's own release.</p>
+<div class="admon note"><p class="admon-title">Note</p><p>The lab network uses the addresses <code>192.168.160.0/24</code> inside each workstation. If the classroom's own network uses the same range, the workstations cannot be on both at once; disconnect them from the classroom network for the lab.</p></div>
+
+<h2>Instructions: build the kit, on the instructor's workstation</h2>
+
+<section class="step">
+<h2>Gather the offline files</h2>
+<p>This is part 1 of <a href="12-disconnected.html">Run the lab disconnected</a>. Do it by hand as written there, or run the playbook, which takes 8 to 12 minutes:</p>
+<pre class="cmd" data-on="host">
+ansible-playbook guide/ansible/disconnected-prepare.yml
+ls -lh offline
+</pre>
+<pre class="out">
+...output omitted...
+-rw-r--r--. 1 student student 111M … gateway-image.tar
+-rw-r--r--. 1 student student 2.7G … lab-images.tar
+-rw-r--r--. 1 student student 696M … mirror-registry.tar.gz
+-rw-r--r--. 1 student student 1.8G … rhem-bundle.tar.gz
+</pre>
+</section>
+
+<section class="step">
+<h2>Assemble the kit</h2>
+<pre class="cmd" data-on="host">
+ansible-playbook guide/ansible/classroom-kit.yml
+ls classroom-kit
+cat classroom-kit/README.txt
+</pre>
+<pre class="out">
+...output omitted...
+guide  inputs  offline  README.txt  SHA256SUMS
+...output omitted...
+</pre>
+<table>
+<tr><th>In the kit</th><th>What it is</th></tr>
+<tr><td><code>guide/</code></td><td>A copy of this guide, the <code>lab</code> command and the playbooks, without version history.</td></tr>
+<tr><td><code>inputs/</code></td><td>The RHEL 9.8 guest image. Your activation key and pull secret are not copied.</td></tr>
+<tr><td><code>offline/</code></td><td>The four offline files.</td></tr>
+<tr><td><code>SHA256SUMS</code></td><td>Checksums of the files in <code>inputs</code> and <code>offline</code>, so that each workstation can check its copy.</td></tr>
+<tr><td><code>README.txt</code></td><td>The student's instructions: the same commands as in the next section.</td></tr>
+</table>
+<p>Rebuild the kit when the guide changes: the playbook copies the guide again and reuses the large files that are already there.</p>
+</section>
+
+<section class="step">
+<h2>Get the kit to the students</h2>
+<p>Use whichever suits the room. The kit works from any folder.</p>
+<p><b>Portable media.</b> Copy the folder <code>classroom-kit</code> to a drive with 7 GB free and a file system that holds files larger than 4 GB (exFAT or XFS, not FAT32). Students can run the setup straight from the drive.</p>
+<p><b>Over the classroom network.</b> Pack the kit into one file and serve it from your workstation:</p>
+<pre class="cmd" data-on="host">
+tar -cf classroom-kit.tar classroom-kit
+python3 -m http.server 8000
+</pre>
+<p>Students fetch and unpack it. The address is your workstation's address on the classroom network, which you give them:</p>
+<pre class="file">
+curl -O http://<i>&lt;instructor_address&gt;</i>:8000/classroom-kit.tar
+tar -xf classroom-kit.tar
+</pre>
+<p>Stop the server with <kbd>Ctrl</kbd>+<kbd>C</kbd> when everyone has the file. Your workstation's firewall must allow port 8000 for this: <code>sudo firewall-cmd --add-port=8000/tcp</code> opens it until the next reboot.</p>
+</section>
+
+<h2>Instructions: on each student workstation</h2>
+
+<section class="step">
+<h2>Set up the workstation from the kit</h2>
+<p>The student opens a terminal in the kit folder, wherever it is, and runs:</p>
+<pre class="cmd" data-on="host" data-dir="classroom-kit">
+ansible-playbook guide/ansible/classroom-student.yml
+</pre>
+<pre class="out">
+...output omitted...
+TASK [What to do next] *********************************************************
+ok: [localhost] => {
+    "msg": "The working folder /home/student/edgelab is ready. Go there, start the guide with \"make -C guide serve\", and begin at \"Run the lab disconnected\", part 2."
+}
+...output omitted...
+</pre>
+<p>The playbook does this:</p>
+<ul>
+  <li>Checks the workstation: KVM, the right to manage VMs, the lab's tools, 60 GB of free space.</li>
+  <li>Checks every large file in the kit against its checksum.</li>
+  <li>Creates <code>~/edgelab</code> exactly as module 0 does: the guide, the lab files, the <code>lab</code> command, the folders, the guest image and the four offline files.</li>
+  <li>Lets the VM service pass through the student's home folder to reach the disk images (<code>chmod o+x ~</code>). This is its only change outside <code>~/edgelab</code>.</li>
+</ul>
+<p>A failed check stops the playbook and says what is missing. It can be run again.</p>
+</section>
+
+<section class="step">
+<h2>Start the lab</h2>
+<pre class="cmd" data-on="host" data-dir="classroom-kit">
+cd ~/edgelab
+./lab grade prep-workstation
+make -C guide serve
+</pre>
+<pre class="out">
+...output omitted...
+ · offline holds the four files of a disconnected lab ..................... SUCCESS
+ · inputs/rhsm-activation and inputs/pull-secret.json ........................ SKIP
+     Not needed: ~/edgelab/offline exists, so nothing is fetched from Red Hat.
+
+Overall lab grade: PASS
+...output omitted...
+</pre>
+<p>The last command prints the address of the guide, served from the student's own workstation. Students begin at <a href="12-disconnected.html">Run the lab disconnected</a>, part 2, "Create the disconnected network", and follow it through the modules.</p>
+</section>
+
+<h2>Running the class</h2>
+<table>
+<tr><th>Question</th><th>Answer</th></tr>
+<tr><td>How long does it take?</td><td>The module times on the overview page add up to about three hours. Offline, nothing waits on a download.</td></tr>
+<tr><td>Where is a student?</td><td><code>./lab status</code> on their workstation lists every exercise as passed or not and names the next step. <code>./lab grade <i>exercise</i></code> explains each failure.</td></tr>
+<tr><td>Can I shorten the server setup?</td><td>Yes. <code>ansible-playbook guide/ansible/disconnected-server.yml</code>, run in <code>~/edgelab</code>, builds the disconnected network and a server ready for Edge Manager in 3 to 6 minutes. Students then continue from "Configure and start Edge Manager" in Appendix A. Use it when the class is about managing devices more than about installing offline, or to rescue a student who has fallen behind.</td></tr>
+<tr><td>How do I reset a workstation for the next class?</td><td>The student follows <a href="11-teardown.html">Remove the lab</a>, skipping the unregistration step. The kit is untouched and can be used again.</td></tr>
+</table>
+
+<h2>What was validated</h2>
+<table>
+<tr><th>Role</th><th>Tested on</th><th>What was run</th></tr>
+<tr><td>Instructor</td><td>Fedora 44 and Fedora 45</td><td>Module 0, then both playbooks: the offline files gathered (about 12 minutes) and the kit assembled.</td></tr>
+<tr><td>Student</td><td>Fedora 44, Fedora 45, RHEL 9.8 and RHEL 10.2</td><td>Packages installed as listed above, workstation set up from the kit and graded, and a disconnected server built from it.</td></tr>
+<tr><td>Student, whole lab</td><td>Fedora 45, on a separate machine</td><td>Every exercise from the kit, by hand, with no internet access for the lab. The kit arrived both as a copied folder and as one file over HTTP.</td></tr>
+</table>
+<p>The playbooks ran with ansible-core 2.14, 2.16, 2.20 and 2.22. Not tested: an instructor's workstation running RHEL, portable media, and more than one student at a time.</p>
+</main>
+</div>
+<script src="lab.js"></script>
+</body>
+</html>

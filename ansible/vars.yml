@@ -1,0 +1,28 @@
+# Names and versions the playbooks use. They match the guide; override with -e only to test the playbooks
+# against an environment built under other names.
+lab_dir: "{{ lookup('env', 'HOME') }}/edgelab"
+ssh_config: "{{ lab_dir }}/ssh_config"
+libvirt_network: rhem-lab
+vm_prefix: ""
+connected_network_xml: "{{ lab_dir }}/network.xml"
+disconnected_network_xml: "{{ playbook_dir }}/../files/network-disconnected.xml"
+guest_image: "{{ lab_dir }}/inputs/rhel-9.8-x86_64-kvm.qcow2"
+virsh: virsh -c qemu:///system
+
+edge_manager_repo: edge-manager-1.4-for-rhel-9-x86_64-rpms
+edge_manager_release: 1.4.0
+# The gateway's nginx image: the Image= line of /usr/share/containers/systemd/flightctl-gateway.container.
+gateway_image: rhel9/nginx-124:1-1792441608
+mirror_registry_url: https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/mirror-registry/1.3.11/mirror-registry.tar.gz
+lab_images:
+  - registry.redhat.io/rhel9/rhel-bootc:9.8
+  - registry.redhat.io/rhel9/bootc-image-builder:latest
+  - registry.access.redhat.com/ubi9/nginx-124:latest
+offline_files:
+  - rhem-bundle.tar.gz
+  - gateway-image.tar
+  - mirror-registry.tar.gz
+  - lab-images.tar
+
+# The classroom kit: everything a student workstation needs, in one folder.
+kit_dir: "{{ lab_dir }}/classroom-kit"
