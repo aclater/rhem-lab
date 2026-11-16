@@ -53,6 +53,7 @@ nav.side .prog.done { color: var(--ok); font-weight: 600; }
 nav.side .legend { margin-top: 20px; padding: 14px 8px 0; border-top: 1px solid var(--line); font-size: .76rem; color: var(--muted); }
 nav.side .legend div { margin: 6px 0; }
 nav.side .legend code { background: none; padding: 0; display: block; color: var(--ink); }
+nav.side .version { margin: 14px 0 0; padding: 0 8px; font-size: .76rem; color: var(--muted); font-variant-numeric: tabular-nums; }
 
 main { padding: 36px 48px 90px; max-width: 900px; }
 .eyebrow { font: 600 .78rem/1.4 var(--text); letter-spacing: .08em; text-transform: uppercase; color: var(--accent); margin: 0 0 6px; }
