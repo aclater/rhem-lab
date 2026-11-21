@@ -72,7 +72,7 @@ guide  images  inputs  keys  lab  network-disconnected.xml  network.xml  ssh_con
 </pre>
 <table>
 <tr><th>In <code>~/edgelab</code></th><th>What it is</th></tr>
-<tr><td><code>guide/</code></td><td>This guide's repository. <code>make -C guide serve</code> starts a small web server for the guide in the background and prints its address: <code>http://127.0.0.1:8765/</code>, or the next free port if 8765 is taken. <code>make -C guide stop</code> stops it.</td></tr>
+<tr><td><code>guide/</code></td><td>This guide's repository. <code>make -C guide serve</code> starts a small web server for the guide in the background and prints its address: <code>http://127.0.0.1:8765/</code>, or the next free port if 8765 is taken. <code>make -C guide stop</code> stops it. The server answers on this machine only; <code>make -C guide serve HOST=0.0.0.0</code> also lets other machines on your network open the guide.</td></tr>
 <tr><td><code>network.xml</code>, <code>ssh_config</code></td><td>Two small lab files copied out of the repository: the network definition, and SSH settings for the VMs. You read each one before using it.</td></tr>
 <tr><td><code>lab</code></td><td>A link to the guide's <code>lab</code> command, which checks your work: <code>./lab start</code>, <code>./lab grade</code> and <code>./lab finish</code> for each exercise, and <code>./lab status</code> at any time. It only reads.</td></tr>
 <tr><td><code>inputs/</code></td><td>The three files you download next.</td></tr>
